@@ -9,12 +9,13 @@ import base64
 from openai import OpenAI
 import logging
 import PyPDF2
+from ..config.config import get_settings
 
 class BrochureProcessor:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.client = None  # Initialize later when needed
-        
+        self.settings = get_settings()  # Get settings in constructor        
         self.sections = {
             "specifications": [],
             "interior": [],
@@ -43,7 +44,11 @@ class BrochureProcessor:
         """Ensure OpenAI client is initialized"""
         if not self.client:
             try:
-                self.client = OpenAI()
+                # Check if API key exists and has correct format
+                if not self.settings.OPENAI_API_KEY or not self.settings.OPENAI_API_KEY.startswith('sk-'):
+                    raise Exception("Invalid OpenAI API key format")
+                    
+                self.client = OpenAI(api_key=self.settings.OPENAI_API_KEY)
                 # Test the connection
                 self.client.models.list()
             except Exception as e:
