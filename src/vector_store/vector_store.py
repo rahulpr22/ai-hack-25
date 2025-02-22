@@ -1,18 +1,19 @@
-from typing import Dict, List, Optional
-from pinecone import Pinecone, ServerlessSpec
-from langchain_openai import OpenAIEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-import json
 import logging
-from ..config.config import get_settings
 import uuid
+from typing import Dict, List, Optional
+
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
+from pinecone import Pinecone, ServerlessSpec
+
+from ..config.config import get_settings
 
 settings = get_settings()
 
 class VectorStore:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.embeddings = OpenAIEmbeddings(openai_api_key=settings.OPENAI_API_KEY)
+        self.embeddings = OpenAIEmbeddings(openai_api_key=settings.OPENAI_GPT_KEY)
         
         # Initialize Pinecone
         pc = Pinecone(api_key=settings.PINECONE_API_KEY)
@@ -67,7 +68,7 @@ class VectorStore:
         
         return documents
 
-    async def upsert_car_data(self, car_data: Dict[str, List[str]], car_model: str, images: List[Dict] = None):
+    async def upsert_car_data(self, car_data: Dict[str, List[str]], car_model: str):
         """
         Upsert car data and optional images into Pinecone
         """
@@ -95,29 +96,7 @@ class VectorStore:
                         }
                     )]
                 )
-            
-            # If images are provided, store them with text description embeddings
-            if images:
-                for image in images:
-                    # Generate embedding from image description
-                    description = f"{image['metadata']['type']} view of {car_model}: {image['metadata'].get('description', '')}"
-                    embedding = await self.embeddings.aembed_query(description)
-                    
-                    vector_id = f"{car_model}_image_{image['metadata']['type']}_{uuid.uuid4()}"
-                    self.index.upsert(
-                        vectors=[(
-                            vector_id,
-                            embedding,
-                            {
-                                "image_data": image["image_data"],
-                                **image["metadata"],
-                                "car_model": car_model,
-                                "description": description,
-                                "type": "image"
-                            }
-                        )]
-                    )
-            
+
             self.logger.info(f"Successfully upserted data for {car_model}")
             
         except Exception as e:
@@ -245,4 +224,39 @@ class VectorStore:
             
         except Exception as e:
             self.logger.error(f"Error searching images: {str(e)}")
+            raise
+
+    async def upsert_video(self, video_data: str, car_model: str, description: str):
+        """
+        Upsert a video into Pinecone
+        Args:
+            video_data: Base64 encoded video data
+            car_model: Name of the car model
+            description: Description of the video
+        """
+        try:
+            # Generate embedding from video description
+            embedding = await self.embeddings.aembed_query(description)
+            
+            # Create unique vector ID
+            vector_id = f"{car_model}_video_{uuid.uuid4()}"
+            
+            # Upsert to Pinecone
+            self.index.upsert(
+                vectors=[(
+                    vector_id,
+                    embedding,
+                    {
+                        "video_data": video_data,
+                        "car_model": car_model,
+                        "description": description,
+                        "type": "video"
+                    }
+                )]
+            )
+            
+            self.logger.info(f"Successfully upserted video for {car_model}")
+            
+        except Exception as e:
+            self.logger.error(f"Error upserting video: {str(e)}")
             raise 

@@ -29,7 +29,7 @@ class CarWebScraper:
             'Authorization': f'Bearer {settings.PERPLEXITY_API_KEY}',
             'Content-Type': 'application/json'
         }
-        self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        self.openai_client = OpenAI(api_key=settings.OPENAI_GPT_KEY)
         self.logger.debug("Initialized CarWebScraper with Perplexity and OpenAI clients")
         self.search_urls = {
             "cardekho": {
