@@ -1,5 +1,7 @@
 import streamlit as st
 import asyncio
+
+from src.data_ingestion import BrochureProcessor
 from src.data_ingestion.data_ingestion_orchestrator import DataIngestionOrchestrator
 from src.vector_store.vector_store import VectorStore
 from openai import OpenAI
