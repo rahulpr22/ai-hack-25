@@ -1,8 +1,17 @@
 import streamlit as st
 import asyncio
-from src.data_ingestion.brochure_processor import BrochureProcessor
-from src.vector_store import VectorStore
-import base64
+from src.data_ingestion.data_ingestion_orchestrator import DataIngestionOrchestrator
+from src.vector_store.vector_store import VectorStore
+from openai import OpenAI
+import tempfile
+import os
+from typing import List, Dict
+from dotenv import load_dotenv
+from src.config.config import get_settings
+
+# Load environment variables
+load_dotenv()
+settings = get_settings()
 
 # Set page configuration
 st.set_page_config(
@@ -11,479 +20,208 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS for better styling
-st.markdown("""
-<style>
-    .main {
-        padding: 2rem;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-        padding: 0;
-        margin-bottom: 1rem;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 3rem;
-        white-space: pre-wrap;
-        border-radius: 4px;
-        padding: 0 1rem;
-    }
-    .stTabs [data-baseweb="tab-list"] button {
-        font-size: 1.2rem;
-        font-weight: 500;
-    }
-    .stTabs [data-baseweb="tab-panel"] {
-        padding: 0;
-    }
-    .chat-message {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
-    }
-    .user-message {
-        background-color: #e6f3ff;
-    }
-    .assistant-message {
-        background-color: #f0f2f6;
-    }
-    .success-box {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #d1fae5;
-        border: 1px solid #059669;
-    }
-    /* File upload styling */
-    .upload-section {
-        border: 2px dashed #4CAF50;
-        border-radius: 10px;
-        padding: 20px;
-        margin: 1rem 0;
-        background-color: #f8f9fa;
-        text-align: center;
-    }
-    
-    .upload-header {
-        color: #2E7D32;
-        font-size: 1.2em;
-        margin: 0;
-        padding: 0;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .upload-header emoji {
-        font-size: 1.4em;
-        line-height: 1;
-    }
-    
-    /* Image preview section */
-    .image-preview {
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        padding: 15px;
-        margin: 10px 0;
-        background-color: white;
-    }
-    
-    .image-metadata {
-        background-color: #f8f9fa;
-        padding: 10px;
-        border-radius: 5px;
-        margin-top: 10px;
-    }
-    
-    /* Guidelines section */
-    .guidelines {
-        background-color: #f0f7ff;
-        border-left: 4px solid #1976D2;
-        padding: 15px;
-        border-radius: 0 8px 8px 0;
-        margin: 10px 0;
-    }
-    
-    /* Hide default file uploader label */
-    .stFileUploader > label {
-        display: none;
-    }
-    
-    /* Remove extra padding from file uploader */
-    .stFileUploader > div[data-testid="stFileUploader"] {
-        padding-top: 0;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Initialize components
+orchestrator = DataIngestionOrchestrator()
+vector_store = VectorStore()
 
-async def render_ingestion_tab(processor: BrochureProcessor, vector_store: VectorStore):
-    """Render the data ingestion tab"""
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.header("📚 Knowledge Base Management")
-        st.write("Upload car brochures with optional images")
-        
-        # File upload tabs
-        upload_tabs = st.tabs(["📄 PDF Upload", "📝 Markdown"])
-        
-        # PDF Tab
-        with upload_tabs[0]:
-            uploaded_pdf = st.file_uploader(
-                "Upload PDF Brochure",
-                type=['pdf'],
-                help="Upload a car brochure in PDF format",
-                key="pdf_uploader",
-                label_visibility="collapsed"
-            )
-            
-            uploaded_images = st.file_uploader(
-                "Upload Additional Images",
-                type=['png', 'jpg', 'jpeg'],
-                accept_multiple_files=True,
-                help="Upload additional car images",
-                key="pdf_images",
-                label_visibility="collapsed"
-            )
-            
-            if uploaded_pdf:
-                try:
-                    progress_text = "Analyzing PDF brochure..."
-                    progress_bar = st.progress(0, text=progress_text)
-                    
-                    # Update progress
-                    progress_bar.progress(25, text="Extracting text and images...")
-                    try:
-                        structured_data = processor.process_brochure(uploaded_pdf, 'pdf')
-                    except Exception as e:
-                        st.error(f"🚫 {str(e)}")
-                        st.info("Please check your OpenAI API key in the .env file")
-                        return
-                    
-                    progress_bar.progress(50, text="Processing with AI...")
-                    car_model = uploaded_pdf.name.replace('.pdf', '')
-                    
-                    # Process optional images if provided
-                    images_data = []
-                    if uploaded_images:
-                        progress_bar.progress(60, text="Processing additional images...")
-                        cols = st.columns(3)
-                        for idx, image in enumerate(uploaded_images):
-                            with cols[idx % 3]:
-                                st.image(image, caption=image.name, use_container_width=True)
-                                with st.container():
-                                    st.markdown('<div class="image-metadata">', unsafe_allow_html=True)
-                                    image_type = st.selectbox(
-                                        "Image Type",
-                                        ["Exterior", "Interior", "Feature"],
-                                        key=f"pdf_img_type_{idx}"
-                                    )
-                                    description = st.text_area(
-                                        "Description",
-                                        key=f"pdf_img_desc_{idx}",
-                                        height=100,
-                                        placeholder="Enter image description..."
-                                    )
-                                    st.markdown('</div>', unsafe_allow_html=True)
-                                try:
-                                    metadata = {
-                                        "type": image_type,
-                                        "description": description,
-                                        "car_model": car_model
-                                    }
-                                    image_data = processor.process_image(image, metadata)
-                                    images_data.append(image_data)
-                                except Exception as e:
-                                    st.error(f"Error processing image: {str(e)}")
-                    
-                    progress_bar.progress(75, text="Storing in database...")
-                    await vector_store.upsert_car_data(
-                        car_data=structured_data,
-                        car_model=car_model,
-                        images=images_data if images_data else None
-                    )
-                    
-                    progress_bar.progress(100, text="Complete!")
-                    st.success("✅ Successfully processed PDF brochure" + 
-                             (f" and {len(images_data)} images" if images_data else ""))
-                    
-                    # Show extracted information
-                    for section, items in structured_data.items():
-                        if items:
-                            with st.expander(f"📍 {section.title()}", expanded=True):
-                                for item in items:
-                                    st.write(f"• {item}")
-                    
-                except Exception as e:
-                    st.error(f"Error processing PDF: {str(e)}")
-                finally:
-                    if 'progress_bar' in locals():
-                        progress_bar.empty()
-        
-        # Markdown Tab
-        with upload_tabs[1]:
-            st.markdown('<div class="upload-section">', unsafe_allow_html=True)
-            st.markdown('<p class="upload-header">📝 Upload Markdown File</p>', unsafe_allow_html=True)
-            uploaded_markdown = st.file_uploader(
-                "Upload Markdown File",
-                type=['md', 'markdown'],
-                help="Upload a markdown file containing car specifications and details",
-                key="markdown_uploader",
-                label_visibility="collapsed"
-            )
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="upload-section">', unsafe_allow_html=True)
-            st.markdown('<p class="upload-header">🖼️ Additional Images (Optional)</p>', unsafe_allow_html=True)
-            uploaded_md_images = st.file_uploader(
-                "Upload Additional Images",
-                type=['png', 'jpg', 'jpeg'],
-                accept_multiple_files=True,
-                help="Upload additional car images",
-                key="md_images",
-                label_visibility="collapsed"
-            )
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            if uploaded_markdown:
-                try:
-                    progress_text = "Analyzing markdown document..."
-                    progress_bar = st.progress(0, text=progress_text)
-                    
-                    progress_bar.progress(30, text="Parsing markdown content...")
-                    content = uploaded_markdown.getvalue().decode('utf-8')
-                    
-                    progress_bar.progress(50, text="Extracting structured data...")
-                    structured_data = processor.process_markdown(content)
-                    car_model = uploaded_markdown.name.replace('.md', '')
-                    
-                    # Process optional images if provided
-                    images_data = []
-                    if uploaded_md_images:
-                        progress_bar.progress(60, text="Processing additional images...")
-                        cols = st.columns(3)
-                        for idx, image in enumerate(uploaded_md_images):
-                            with cols[idx % 3]:
-                                st.image(image, caption=image.name, use_container_width=True)
-                                with st.container():
-                                    st.markdown('<div class="image-metadata">', unsafe_allow_html=True)
-                                    image_type = st.selectbox(
-                                        "Image Type",
-                                        ["Exterior", "Interior", "Feature"],
-                                        key=f"md_img_type_{idx}"
-                                    )
-                                    description = st.text_area(
-                                        "Description",
-                                        key=f"md_img_desc_{idx}",
-                                        height=100,
-                                        placeholder="Enter image description..."
-                                    )
-                                    st.markdown('</div>', unsafe_allow_html=True)
-                                try:
-                                    metadata = {
-                                        "type": image_type,
-                                        "description": description,
-                                        "car_model": car_model
-                                    }
-                                    image_data = processor.process_image(image, metadata)
-                                    images_data.append(image_data)
-                                except Exception as e:
-                                    st.error(f"Error processing image: {str(e)}")
-                    
-                    progress_bar.progress(80, text="Storing in database...")
-                    await vector_store.upsert_car_data(
-                        car_data=structured_data,
-                        car_model=car_model,
-                        images=images_data if images_data else None
-                    )
-                    
-                    progress_bar.progress(100, text="Complete!")
-                    st.success("✅ Successfully processed markdown" + 
-                             (f" and {len(images_data)} images" if images_data else ""))
-                    
-                    # Show results in tabular format
-                    if any(items for items in structured_data.values()):
-                        st.write("### 📊 Extracted Information")
-                        
-                        # Create tabs for different aspects
-                        result_tabs = st.tabs([
-                            "🔧 Technical",
-                            "🛋️ Interior & Tech",
-                            "🎨 Design & Safety",
-                            "💰 Pricing & Colors"
-                        ])
-                        
-                        # Technical specs and performance
-                        with result_tabs[0]:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if structured_data["specifications"]:
-                                    st.markdown("#### Specifications")
-                                    for item in structured_data["specifications"]:
-                                        st.write(f"• {item}")
-                            with col2:
-                                if structured_data["performance"]:
-                                    st.markdown("#### Performance")
-                                    for item in structured_data["performance"]:
-                                        st.write(f"• {item}")
-                        
-                        # Interior and Technology
-                        with result_tabs[1]:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if structured_data["interior"]:
-                                    st.markdown("#### Interior Features")
-                                    for item in structured_data["interior"]:
-                                        st.write(f"• {item}")
-                            with col2:
-                                if structured_data["technology"]:
-                                    st.markdown("#### Technology")
-                                    for item in structured_data["technology"]:
-                                        st.write(f"• {item}")
-                        
-                        # Design and Safety
-                        with result_tabs[2]:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if structured_data["exterior"]:
-                                    st.markdown("#### Exterior Design")
-                                    for item in structured_data["exterior"]:
-                                        st.write(f"• {item}")
-                            with col2:
-                                if structured_data["safety"]:
-                                    st.markdown("#### Safety Features")
-                                    for item in structured_data["safety"]:
-                                        st.write(f"• {item}")
-                        
-                        # Pricing and Colors
-                        with result_tabs[3]:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if structured_data["pricing"]:
-                                    st.markdown("#### Pricing")
-                                    for item in structured_data["pricing"]:
-                                        st.write(f"• {item}")
-                            with col2:
-                                if structured_data["colors"]:
-                                    st.markdown("#### Available Colors")
-                                    for item in structured_data["colors"]:
-                                        st.write(f"• {item}")
-                
-                except Exception as e:
-                    st.error(f"Error processing markdown: {str(e)}")
-                finally:
-                    if 'progress_bar' in locals():
-                        progress_bar.empty()
-    
-    with col2:
-        st.markdown('<div class="guidelines">', unsafe_allow_html=True)
-        st.markdown("""
-        ### 📋 Guidelines
-        
-        **For Brochures:**
-        - Use PDF or markdown format
-        - Include car specifications
-        - Add pricing details
-        - List all features
-        - Mention safety aspects
-        
-        **For Images (Optional):**
-        - High quality photos
-        - Clear visibility
-        - Multiple angles
-        - Interior & exterior shots
-        - Feature highlights
-        """)
-        st.markdown('</div>', unsafe_allow_html=True)
+# Initialize OpenAI client with API key from settings
+openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
-async def render_chat_tab(vector_store: VectorStore):
-    """Render the chat interface tab"""
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        st.header("🚗 Car Sales Assistant")
-        st.write("Your AI-powered automotive consultant")
+def generate_chat_response(messages: List[Dict], car_data: Dict = None) -> str:
+    """Generate a response using OpenAI with context from vector store"""
+    try:
+        # Get relevant context from vector store if available
+        context = ""
+        if car_data:
+            context = "Here is the relevant car information:\n"
+            for section, items in car_data.items():
+                if items:
+                    context += f"\n{section.upper()}:\n"
+                    for item in items:
+                        context += f"• {item}\n"
+
+        # Prepare the messages for the API
+        system_message = {
+            "role": "system",
+            "content": """You are an AI car sales assistant. Your goal is to help customers understand car features and make informed decisions.
+            Be professional but conversational. Use the provided car information when available.
+            If you don't have specific information about something, be honest about it.
+            Format your responses in a clear, easy-to-read way using bullet points where appropriate."""
+        }
         
-        # Initialize or get chat history
-        if "messages" not in st.session_state:
-            st.session_state.messages = [
-                {
-                    "role": "assistant",
-                    "content": "👋 Hello! I'm your automotive consultant. How can I help you find the perfect car today?"
-                }
-            ]
-    
-    with col2:
-        st.markdown("""
-        ### 💡 Try asking about:
-        - Car specifications
-        - Price comparisons
-        - Safety features
-        - Performance details
-        - Available colors
-        """)
-    
-    # Chat display area
-    chat_container = st.container()
-    with chat_container:
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-    
-    # Chat input
-    if prompt := st.chat_input("Ask me anything about our cars..."):
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        context_message = {
+            "role": "system",
+            "content": context
+        } if context else None
+        
+        api_messages = [system_message]
+        if context_message:
+            api_messages.append(context_message)
+        api_messages.extend(messages)
+
+        # Get response from OpenAI
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",  # Changed to a standard model
+            messages=[msg for msg in api_messages if msg is not None],
+            temperature=0.7,
+            max_tokens=1000
+        )
+
+        return response.choices[0].message.content
+
+    except Exception as e:
+        st.error(f"Error generating response: {str(e)}")
+        return "I apologize, but I encountered an error while processing your request. Please try again."
+
+async def process_uploaded_file(file, file_type: str):
+    """Process uploaded file using the orchestrator"""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_type}') as tmp_file:
+        tmp_file.write(file.getvalue())
+        tmp_file.flush()
         
         try:
-            with st.spinner("Searching for information..."):
-                results = await vector_store.search_car_data(prompt)
-            
-            response = "I'd be happy to help you with that!\n\n"
-            for result in results:
-                response += f"• {result['text']}\n\n"
-            response += "\nIs there anything specific you'd like to know more about?"
-            
-            with st.chat_message("assistant"):
-                st.markdown(response)
-            st.session_state.messages.append({"role": "assistant", "content": response})
-            
-            # Add image search toggle
-            show_images = st.toggle("Include images in search", value=False)
+            result = await orchestrator.process_car_data(tmp_file.name)
+            return result
+        finally:
+            os.unlink(tmp_file.name)
 
-            if show_images:
-                image_results = await vector_store.search_images(prompt)
-                if image_results:
-                    st.write("Relevant images:")
-                    cols = st.columns(3)
-                    for idx, result in enumerate(image_results):
-                        with cols[idx % 3]:
-                            st.image(
-                                base64.b64decode(result["image_data"]),
-                                caption=f"{result['car_model']} - {result['type']}",
-                                use_container_width=True  # Updated parameter
-                            )
-            
+async def render_chat_tab():
+    """Render the chat interface"""
+    st.header("💬 Chat with AI Sales Assistant")
+    
+    # Initialize chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # Display chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Chat input
+    if prompt := st.chat_input("Ask about car features, specifications, or comparisons..."):
+        # Add user message to chat history
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # Display user message
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Get relevant car data from vector store
+        car_data = None
+        try:
+            results = await vector_store.search_car_data(query=prompt, top_k=5)
+            if results:
+                car_data = {}
+                for result in results:
+                    section = result.get('metadata', {}).get('section', 'general')
+                    if section not in car_data:
+                        car_data[section] = []
+                    car_data[section].append(result['text'])
         except Exception as e:
-            st.error("I apologize, but I'm having trouble accessing that information right now.")
+            st.warning(f"Could not retrieve car data: {str(e)}")
 
-async def main():
-    st.title("🚗 Automotive Sales Assistant")
+        # Generate and display assistant response
+        with st.chat_message("assistant"):
+            response = generate_chat_response(st.session_state.messages, car_data)
+            st.markdown(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+
+async def render_ingestion_tab():
+    """Render the data ingestion tab"""
+    st.header("📚 Knowledge Base Management")
+    st.write("Upload car brochures to enrich the knowledge base")
     
-    try:
-        processor = BrochureProcessor()
-        vector_store = VectorStore()
-    except Exception as e:
-        st.error(f"⚠️ {str(e)}")
-        st.info("Please make sure your API keys are properly set in the .env file")
-        return
+    # File upload tabs
+    upload_tabs = st.tabs(["📄 PDF Upload", "📝 Markdown"])
     
-    tab1, tab2 = st.tabs(["💬 Sales Assistant", "⚙️ Knowledge Management"])
+    # PDF Tab
+    with upload_tabs[0]:
+        uploaded_pdf = st.file_uploader(
+            "Upload PDF Brochure",
+            type=['pdf'],
+            help="Upload a car brochure in PDF format",
+            key="pdf_uploader"
+        )
+        
+        if uploaded_pdf:
+            try:
+                progress_text = "Processing brochure..."
+                progress_bar = st.progress(0, text=progress_text)
+                
+                # Process PDF
+                progress_bar.progress(25, text="Analyzing document...")
+                result = await process_uploaded_file(uploaded_pdf, 'pdf')
+                
+                progress_bar.progress(100, text="Complete!")
+                st.success("✅ Successfully processed brochure")
+                
+                # Show extracted information
+                car_model = result.pop('car_model', 'Unknown Model')
+                st.subheader(f"📍 Extracted Information for {car_model}")
+                
+                for section, items in result.items():
+                    if items:
+                        with st.expander(f"🔹 {section.title()}", expanded=True):
+                            for item in items:
+                                st.write(f"• {item}")
+                
+            except Exception as e:
+                st.error(f"Error processing PDF: {str(e)}")
+            finally:
+                if 'progress_bar' in locals():
+                    progress_bar.empty()
     
-    with tab1:
-        await render_chat_tab(vector_store)
+    # Markdown Tab
+    with upload_tabs[1]:
+        uploaded_markdown = st.file_uploader(
+            "Upload Markdown File",
+            type=['md', 'markdown'],
+            help="Upload a markdown file containing car specifications",
+            key="markdown_uploader"
+        )
+        
+        if uploaded_markdown:
+            try:
+                progress_text = "Processing markdown..."
+                progress_bar = st.progress(0, text=progress_text)
+                
+                # Process markdown
+                progress_bar.progress(25, text="Analyzing document...")
+                result = await process_uploaded_file(uploaded_markdown, 'markdown')
+                
+                progress_bar.progress(100, text="Complete!")
+                st.success("✅ Successfully processed markdown")
+                
+                # Show extracted information
+                car_model = result.pop('car_model', 'Unknown Model')
+                st.subheader(f"📍 Extracted Information for {car_model}")
+                
+                for section, items in result.items():
+                    if items:
+                        with st.expander(f"🔹 {section.title()}", expanded=True):
+                            for item in items:
+                                st.write(f"• {item}")
+                
+            except Exception as e:
+                st.error(f"Error processing markdown: {str(e)}")
+            finally:
+                if 'progress_bar' in locals():
+                    progress_bar.empty()
+
+def main():
+    st.title("🚗 AI Car Sales Assistant")
     
-    with tab2:
-        await render_ingestion_tab(processor, vector_store)
+    # Create tabs
+    tabs = st.tabs(["💬 Chat", "📚 Knowledge Base"])
+    
+    # Chat Tab
+    with tabs[0]:
+        asyncio.run(render_chat_tab())
+    
+    # Knowledge Base Tab
+    with tabs[1]:
+        asyncio.run(render_ingestion_tab())
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    main() 

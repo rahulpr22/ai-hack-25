@@ -121,20 +121,75 @@ class BrochureProcessor:
             self.logger.error(f"Error processing PDF: {str(e)}")
             raise
 
-    def process_markdown(self, markdown_content: str) -> Dict[str, List[str]]:
-        """Process markdown content and extract structured information"""
-        # Reset sections for new processing
-        self.sections = {key: [] for key in self.sections.keys()}
+    def extract_car_model(self, content: str) -> str:
+        """
+        Extract car model information from the content
+        """
+        # Try to find car model in markdown headers
+        headers = re.findall(r'^#\s+(.+?)(?:\s+-|\n|$)', content, re.MULTILINE)
+        if headers:
+            # Look for car model patterns in the first header
+            model_match = re.search(r'(\d{4}\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)*)', headers[0])
+            if model_match:
+                return model_match.group(2).strip()
         
-        # Convert markdown to HTML for easier parsing
-        html_content = markdown.markdown(markdown_content)
-        soup = BeautifulSoup(html_content, 'html.parser')
+        # If not found in headers, try to extract from content
+        model_patterns = [
+            r'Model:\s*([A-Za-z0-9\s]+)',
+            r'Car Model:\s*([A-Za-z0-9\s]+)',
+            r'Vehicle:\s*([A-Za-z0-9\s]+)'
+        ]
         
-        # Extract sections based on headers
+        for pattern in model_patterns:
+            match = re.search(pattern, content)
+            if match:
+                return match.group(1).strip()
+        
+        # If no pattern matches, use AI to extract model name
+        try:
+            self._ensure_client()
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Extract only the car model name from the following text. Respond with just the model name, nothing else."},
+                    {"role": "user", "content": content[:1000]}  # Use first 1000 chars
+                ]
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            self.logger.error(f"Failed to extract car model using AI: {str(e)}")
+            return None
+
+    def process_markdown(self, content: str) -> Dict[str, List[str]]:
+        """
+        Process markdown content and extract car information
+        """
+        # Extract car model first
+        car_model = self.extract_car_model(content)
+        if not car_model:
+            raise ValueError("Could not extract car model from content")
+            
+        # Reset sections
+        self.sections = {
+            "specifications": [],
+            "interior": [],
+            "technology": [],
+            "exterior": [],
+            "safety": [],
+            "performance": [],
+            "pricing": [],
+            "colors": []
+        }
+        
+        # Convert markdown to HTML
+        html = markdown.markdown(content)
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Process each section
         current_section = None
         for element in soup.find_all(['h1', 'h2', 'h3', 'p', 'ul', 'li']):
             if element.name in ['h1', 'h2', 'h3']:
-                current_section = self._determine_section(element.text.lower())
+                current_section = self._determine_section(element.text.strip().lower())
             elif current_section and element.text.strip():
                 if element.name == 'ul':
                     items = [li.text.strip() for li in element.find_all('li')]
@@ -142,7 +197,25 @@ class BrochureProcessor:
                 else:
                     self.sections[current_section].append(element.text.strip())
         
-        return self.sections
+        # Use AI to enhance and categorize the information
+        try:
+            self._ensure_client()
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": self.extraction_prompt},
+                    {"role": "user", "content": content}
+                ]
+            )
+            
+            # Parse and merge AI-extracted information
+            ai_extracted = self._parse_ai_response(response.choices[0].message.content)
+            self._merge_extracted_info(ai_extracted)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to enhance content with AI: {str(e)}")
+        
+        return {"car_model": car_model, **self.sections}
 
     def _determine_section(self, text: str) -> Optional[str]:
         """Determine which section a text belongs to"""
@@ -165,6 +238,50 @@ class BrochureProcessor:
         elif any(word in text for word in ['color', 'paint', 'shade']):
             return 'colors'
         return None
+
+    def _parse_ai_response(self, response_text: str) -> Dict[str, List[str]]:
+        """Parse the AI response into structured sections"""
+        sections = {
+            "specifications": [],
+            "interior": [],
+            "technology": [],
+            "exterior": [],
+            "safety": [],
+            "performance": [],
+            "pricing": [],
+            "colors": []
+        }
+        
+        current_section = None
+        for line in response_text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Check if this is a section header
+            section = self._determine_section(line)
+            if section:
+                current_section = section
+            elif current_section and line.startswith(('•', '-', '*', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.')):
+                # Clean and add the item
+                clean_line = line.lstrip('•-*123456789. ').strip()
+                if clean_line and clean_line not in sections[current_section]:
+                    sections[current_section].append(clean_line)
+        
+        return sections
+
+    def _merge_extracted_info(self, ai_extracted: Dict[str, List[str]]):
+        """Merge AI-extracted information with existing sections"""
+        for section, items in ai_extracted.items():
+            if section in self.sections:
+                # Create a set of existing items (lowercase for case-insensitive comparison)
+                existing_items = {item.lower() for item in self.sections[section]}
+                
+                # Add new items if they don't exist
+                for item in items:
+                    if item.lower() not in existing_items:
+                        self.sections[section].append(item)
+                        existing_items.add(item.lower())
 
     def process_image(self, image_file, metadata: Dict) -> Dict:
         """Process image and prepare for storage"""
