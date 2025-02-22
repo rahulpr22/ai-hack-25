@@ -1,21 +1,29 @@
-# Variables
-VENV_DIR = .venv
-PYTHON = $(VENV_DIR)/bin/python
-PIP = $(VENV_DIR)/bin/pip
+.PHONY: setup clean
 
-# Create virtual environment and install dependencies
+# Python virtual environment variables
+VENV := .venv
+PYTHON := $(VENV)/bin/python
+PIP := $(VENV)/bin/pip
+
 setup:
-	python3 -m venv $(VENV_DIR)
+	brew install libmagic
+	# Create virtual environment if it doesn't exist
+	python3 -m venv $(VENV)
+	# Upgrade pip
 	$(PIP) install --upgrade pip
+	# Install requirements
 	$(PIP) install -r requirements.txt
 	@echo "✅ Setup complete! Run 'make run' to start."
 
 # Run the script with the correct virtual environment
 # TODO: set it up accordingly
 run:
-	$(VENV_DIR)/bin/python main.py
+	streamlit run main.py
 
-# Clean up (remove venv)
 clean:
-	rm -rf $(VENV_DIR)
+	# Remove virtual environment
+	rm -rf $(VENV)
+	# Remove Python cache files
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type f -name "*.pyc" -delete
 	@echo "🧹 Virtual environment removed!"
