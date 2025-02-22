@@ -146,62 +146,54 @@ async def render_ingestion_tab(processor: BrochureProcessor, vector_store: Vecto
             
             if uploaded_pdf:
                 try:
-                    progress_text = "Analyzing PDF brochure..."
-                    progress_bar = st.progress(0, text=progress_text)
+                    with st.spinner("Analyzing PDF brochure..."):
+                        try:
+                            structured_data = processor.process_brochure(uploaded_pdf, 'pdf')
+                        except Exception as e:
+                            st.error(f"🚫 {str(e)}")
+                            st.info("Please check your OpenAI API key in the .env file")
+                            return
+                        
+                        car_model = uploaded_pdf.name.replace('.pdf', '')
+                        
+                        # Process optional images if provided
+                        images_data = []
+                        if uploaded_images:
+                            cols = st.columns(3)
+                            for idx, image in enumerate(uploaded_images):
+                                with cols[idx % 3]:
+                                    st.image(image, caption=image.name, use_container_width=True)
+                                    with st.container():
+                                        st.markdown('<div class="image-metadata">', unsafe_allow_html=True)
+                                        image_type = st.selectbox(
+                                            "Image Type",
+                                            ["Exterior", "Interior", "Feature"],
+                                            key=f"pdf_img_type_{idx}"
+                                        )
+                                        description = st.text_area(
+                                            "Description",
+                                            key=f"pdf_img_desc_{idx}",
+                                            height=100,
+                                            placeholder="Enter image description..."
+                                        )
+                                        st.markdown('</div>', unsafe_allow_html=True)
+                                    try:
+                                        metadata = {
+                                            "type": image_type,
+                                            "description": description,
+                                            "car_model": car_model
+                                        }
+                                        image_data = processor.process_image(image, metadata)
+                                        images_data.append(image_data)
+                                    except Exception as e:
+                                        st.error(f"Error processing image: {str(e)}")
+                        
+                        await vector_store.upsert_car_data(
+                            car_data=structured_data,
+                            car_model=car_model,
+                            images=images_data if images_data else None
+                        )
                     
-                    # Update progress
-                    progress_bar.progress(25, text="Extracting text and images...")
-                    try:
-                        structured_data = processor.process_brochure(uploaded_pdf, 'pdf')
-                    except Exception as e:
-                        st.error(f"🚫 {str(e)}")
-                        st.info("Please check your OpenAI API key in the .env file")
-                        return
-                    
-                    progress_bar.progress(50, text="Processing with AI...")
-                    car_model = uploaded_pdf.name.replace('.pdf', '')
-                    
-                    # Process optional images if provided
-                    images_data = []
-                    if uploaded_images:
-                        progress_bar.progress(60, text="Processing additional images...")
-                        cols = st.columns(3)
-                        for idx, image in enumerate(uploaded_images):
-                            with cols[idx % 3]:
-                                st.image(image, caption=image.name, use_container_width=True)
-                                with st.container():
-                                    st.markdown('<div class="image-metadata">', unsafe_allow_html=True)
-                                    image_type = st.selectbox(
-                                        "Image Type",
-                                        ["Exterior", "Interior", "Feature"],
-                                        key=f"pdf_img_type_{idx}"
-                                    )
-                                    description = st.text_area(
-                                        "Description",
-                                        key=f"pdf_img_desc_{idx}",
-                                        height=100,
-                                        placeholder="Enter image description..."
-                                    )
-                                    st.markdown('</div>', unsafe_allow_html=True)
-                                try:
-                                    metadata = {
-                                        "type": image_type,
-                                        "description": description,
-                                        "car_model": car_model
-                                    }
-                                    image_data = processor.process_image(image, metadata)
-                                    images_data.append(image_data)
-                                except Exception as e:
-                                    st.error(f"Error processing image: {str(e)}")
-                    
-                    progress_bar.progress(75, text="Storing in database...")
-                    await vector_store.upsert_car_data(
-                        car_data=structured_data,
-                        car_model=car_model,
-                        images=images_data if images_data else None
-                    )
-                    
-                    progress_bar.progress(100, text="Complete!")
                     st.success("✅ Successfully processed PDF brochure" + 
                              (f" and {len(images_data)} images" if images_data else ""))
                     
@@ -214,14 +206,9 @@ async def render_ingestion_tab(processor: BrochureProcessor, vector_store: Vecto
                     
                 except Exception as e:
                     st.error(f"Error processing PDF: {str(e)}")
-                finally:
-                    if 'progress_bar' in locals():
-                        progress_bar.empty()
         
         # Markdown Tab
         with upload_tabs[1]:
-            st.markdown('<div class="upload-section">', unsafe_allow_html=True)
-            st.markdown('<p class="upload-header">📝 Upload Markdown File</p>', unsafe_allow_html=True)
             uploaded_markdown = st.file_uploader(
                 "Upload Markdown File",
                 type=['md', 'markdown'],
@@ -229,10 +216,7 @@ async def render_ingestion_tab(processor: BrochureProcessor, vector_store: Vecto
                 key="markdown_uploader",
                 label_visibility="collapsed"
             )
-            st.markdown('</div>', unsafe_allow_html=True)
             
-            st.markdown('<div class="upload-section">', unsafe_allow_html=True)
-            st.markdown('<p class="upload-header">🖼️ Additional Images (Optional)</p>', unsafe_allow_html=True)
             uploaded_md_images = st.file_uploader(
                 "Upload Additional Images",
                 type=['png', 'jpg', 'jpeg'],
@@ -241,137 +225,68 @@ async def render_ingestion_tab(processor: BrochureProcessor, vector_store: Vecto
                 key="md_images",
                 label_visibility="collapsed"
             )
-            st.markdown('</div>', unsafe_allow_html=True)
             
             if uploaded_markdown:
                 try:
-                    progress_text = "Analyzing markdown document..."
-                    progress_bar = st.progress(0, text=progress_text)
+                    with st.spinner("Analyzing markdown document..."):
+                        # Parse markdown content
+                        content = uploaded_markdown.getvalue().decode('utf-8')
+                        
+                        # Extract structured data
+                        structured_data = processor.process_markdown(content)
+                        car_model = uploaded_markdown.name.replace('.md', '')
+                        
+                        # Process optional images if provided
+                        images_data = []
+                        if uploaded_md_images:
+                            cols = st.columns(3)
+                            for idx, image in enumerate(uploaded_md_images):
+                                with cols[idx % 3]:
+                                    st.image(image, caption=image.name, use_container_width=True)
+                                    with st.container():
+                                        st.markdown('<div class="image-metadata">', unsafe_allow_html=True)
+                                        image_type = st.selectbox(
+                                            "Image Type",
+                                            ["Exterior", "Interior", "Feature"],
+                                            key=f"md_img_type_{idx}"
+                                        )
+                                        description = st.text_area(
+                                            "Description",
+                                            key=f"md_img_desc_{idx}",
+                                            height=100,
+                                            placeholder="Enter image description..."
+                                        )
+                                        st.markdown('</div>', unsafe_allow_html=True)
+                                    try:
+                                        metadata = {
+                                            "type": image_type,
+                                            "description": description,
+                                            "car_model": car_model
+                                        }
+                                        image_data = processor.process_image(image, metadata)
+                                        images_data.append(image_data)
+                                    except Exception as e:
+                                        st.error(f"Error processing image: {str(e)}")
+                        
+                        # Store in database
+                        await vector_store.upsert_car_data(
+                            car_data=structured_data,
+                            car_model=car_model,
+                            images=images_data if images_data else None
+                        )
                     
-                    progress_bar.progress(30, text="Parsing markdown content...")
-                    content = uploaded_markdown.getvalue().decode('utf-8')
-                    
-                    progress_bar.progress(50, text="Extracting structured data...")
-                    structured_data = processor.process_markdown(content)
-                    car_model = uploaded_markdown.name.replace('.md', '')
-                    
-                    # Process optional images if provided
-                    images_data = []
-                    if uploaded_md_images:
-                        progress_bar.progress(60, text="Processing additional images...")
-                        cols = st.columns(3)
-                        for idx, image in enumerate(uploaded_md_images):
-                            with cols[idx % 3]:
-                                st.image(image, caption=image.name, use_container_width=True)
-                                with st.container():
-                                    st.markdown('<div class="image-metadata">', unsafe_allow_html=True)
-                                    image_type = st.selectbox(
-                                        "Image Type",
-                                        ["Exterior", "Interior", "Feature"],
-                                        key=f"md_img_type_{idx}"
-                                    )
-                                    description = st.text_area(
-                                        "Description",
-                                        key=f"md_img_desc_{idx}",
-                                        height=100,
-                                        placeholder="Enter image description..."
-                                    )
-                                    st.markdown('</div>', unsafe_allow_html=True)
-                                try:
-                                    metadata = {
-                                        "type": image_type,
-                                        "description": description,
-                                        "car_model": car_model
-                                    }
-                                    image_data = processor.process_image(image, metadata)
-                                    images_data.append(image_data)
-                                except Exception as e:
-                                    st.error(f"Error processing image: {str(e)}")
-                    
-                    progress_bar.progress(80, text="Storing in database...")
-                    await vector_store.upsert_car_data(
-                        car_data=structured_data,
-                        car_model=car_model,
-                        images=images_data if images_data else None
-                    )
-                    
-                    progress_bar.progress(100, text="Complete!")
                     st.success("✅ Successfully processed markdown" + 
                              (f" and {len(images_data)} images" if images_data else ""))
                     
-                    # Show results in tabular format
-                    if any(items for items in structured_data.values()):
-                        st.write("### 📊 Extracted Information")
-                        
-                        # Create tabs for different aspects
-                        result_tabs = st.tabs([
-                            "🔧 Technical",
-                            "🛋️ Interior & Tech",
-                            "🎨 Design & Safety",
-                            "💰 Pricing & Colors"
-                        ])
-                        
-                        # Technical specs and performance
-                        with result_tabs[0]:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if structured_data["specifications"]:
-                                    st.markdown("#### Specifications")
-                                    for item in structured_data["specifications"]:
-                                        st.write(f"• {item}")
-                            with col2:
-                                if structured_data["performance"]:
-                                    st.markdown("#### Performance")
-                                    for item in structured_data["performance"]:
-                                        st.write(f"• {item}")
-                        
-                        # Interior and Technology
-                        with result_tabs[1]:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if structured_data["interior"]:
-                                    st.markdown("#### Interior Features")
-                                    for item in structured_data["interior"]:
-                                        st.write(f"• {item}")
-                            with col2:
-                                if structured_data["technology"]:
-                                    st.markdown("#### Technology")
-                                    for item in structured_data["technology"]:
-                                        st.write(f"• {item}")
-                        
-                        # Design and Safety
-                        with result_tabs[2]:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if structured_data["exterior"]:
-                                    st.markdown("#### Exterior Design")
-                                    for item in structured_data["exterior"]:
-                                        st.write(f"• {item}")
-                            with col2:
-                                if structured_data["safety"]:
-                                    st.markdown("#### Safety Features")
-                                    for item in structured_data["safety"]:
-                                        st.write(f"• {item}")
-                        
-                        # Pricing and Colors
-                        with result_tabs[3]:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if structured_data["pricing"]:
-                                    st.markdown("#### Pricing")
-                                    for item in structured_data["pricing"]:
-                                        st.write(f"• {item}")
-                            with col2:
-                                if structured_data["colors"]:
-                                    st.markdown("#### Available Colors")
-                                    for item in structured_data["colors"]:
-                                        st.write(f"• {item}")
+                    # Show extracted information
+                    for section, items in structured_data.items():
+                        if items:
+                            with st.expander(f"📍 {section.title()}", expanded=True):
+                                for item in items:
+                                    st.write(f"• {item}")
                 
                 except Exception as e:
                     st.error(f"Error processing markdown: {str(e)}")
-                finally:
-                    if 'progress_bar' in locals():
-                        progress_bar.empty()
     
     with col2:
         st.markdown('<div class="guidelines">', unsafe_allow_html=True)
