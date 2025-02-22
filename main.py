@@ -1,22 +1,15 @@
-import streamlit as st
 import asyncio
+import base64
+import json
 import os
 
-from src.data_ingestion import BrochureProcessor
-from src.data_ingestion.data_ingestion_orchestrator import DataIngestionOrchestrator
-from src.vector_store.vector_store import VectorStore
-from openai import OpenAI
-import tempfile
-from typing import List, Dict
-from dotenv import load_dotenv
-from src.config.config import get_settings
-from src.eleven_labs.conversational_ai import create_conversational_ai, get_agent_id
-import json
+import streamlit as st
+
 from src.config import get_settings
 from src.data_ingestion.brochure_processor import BrochureProcessor
-from src.vector_store import VectorStore
 from src.data_ingestion.video_processor import VideoProcessor
-import base64
+from src.eleven_labs.conversational_ai import get_agent_id
+from src.vector_store import VectorStore
 
 settings = get_settings()
 # Set page configuration
@@ -360,48 +353,6 @@ async def render_chat_tab():
         with columns[2]:
             st.empty()
 
-            # Add image search toggle
-            show_images = st.toggle("Include images in search", value=False)
-
-            if show_images:
-                image_results = await vector_store.search_images(prompt)
-                if image_results:
-                    st.write("Relevant images:")
-                    cols = st.columns(3)
-                    for idx, result in enumerate(image_results):
-                        with cols[idx % 3]:
-                            st.image(
-                                base64.b64decode(result["image_data"]),
-                                caption=f"{result['car_model']} - {result['type']}",
-                                use_container_width=True
-                            )
-
-            # Add video search toggle
-            show_videos = st.toggle("Include videos in search", value=False)
-
-            if show_videos:
-                with st.spinner("Fetching and processing videos..."):
-                    video_results = await vector_store.search_videos(prompt)
-                    if video_results:
-                        st.write("Related videos:")
-                        for result in video_results:
-                            # Create a unique key for each video
-                            video_key = f"video_{result['car_model']}_{result['description']}"
-
-                            # Display video using HTML video player
-                            video_html = f"""
-                            <video width="100%" controls>
-                                <source src="data:video/mp4;base64,{result['video_data']}" type="video/mp4">
-                                Your browser does not support the video tag.
-                            </video>
-                            """
-                            st.markdown(video_html, unsafe_allow_html=True)
-                            st.caption(f"{result['car_model']} - {result['description']}")
-
-        except Exception as e:
-            st.error("I apologize, but I'm having trouble accessing that information right now.")
-
-
 async def main():
     st.title("Sales Assistant")
 
@@ -417,11 +368,11 @@ async def main():
     tabs = st.tabs(["💬 Chat", "📚 Add a New Product"])
 
     with tabs[0]:
-        asyncio.run(render_chat_tab())
+        await render_chat_tab()
 
     with tabs[1]:
-        asyncio.run(render_ingestion_tab())
+        await render_ingestion_tab(processor, vector_store, video_processor)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
