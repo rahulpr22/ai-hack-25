@@ -1,5 +1,5 @@
 """
-Vector store package for managing car data in Pinecone
+Vector store package for managing document data in Pinecone
 """
 
 from .vector_store import VectorStore

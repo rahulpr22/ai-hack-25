@@ -6,7 +6,6 @@ PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
 setup:
-	brew install libmagic
 	# Create virtual environment if it doesn't exist
 	python3 -m venv $(VENV)
 	# Upgrade pip

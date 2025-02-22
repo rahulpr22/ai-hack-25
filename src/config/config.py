@@ -1,13 +1,15 @@
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 from functools import lru_cache
+import os
 
 class Settings(BaseSettings):
     # API Keys and Environment
     OPENAI_API_KEY: str
     PINECONE_API_KEY: str
     PINECONE_ENVIRONMENT: str
-    PINECONE_INDEX_NAME: str = "car-sales-agent"
+    PINECONE_INDEX_NAME: str = "imagine-dragons"
+    PINECONE_ENVIRONMENT: str = "aws-starter"
     
     # Web Scraping Configuration
     ALLOWED_DOMAINS: List[str] = [
