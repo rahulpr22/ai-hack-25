@@ -11,11 +11,13 @@ import logging
 import PyPDF2
 from ..config.config import get_settings
 
+settings = get_settings()  # Get settings in constructor
+
+
 class BrochureProcessor:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.client = None  # Initialize later when needed
-        self.settings = get_settings()  # Get settings in constructor        
         self.sections = {
             "specifications": [],
             "interior": [],
@@ -45,26 +47,27 @@ class BrochureProcessor:
         if not self.client:
             try:
                 # Check if API key exists and has correct format
-                if not self.settings.OPENAI_API_KEY or not self.settings.OPENAI_API_KEY.startswith('sk-'):
+                logging.info("api keys", settings.OPENAI_GPT_KEY, settings.PINECONE_API_KEY, settings.OPENAI_GPT_KEY)
+                if not settings.OPENAI_GPT_KEY or not settings.OPENAI_GPT_KEY.startswith('sk-'):
                     raise Exception("Invalid OpenAI API key format")
                     
-                self.client = OpenAI(api_key=self.settings.OPENAI_API_KEY)
+                self.client = OpenAI(api_key=settings.OPENAI_GPT_KEY)
                 # Test the connection
                 self.client.models.list()
             except Exception as e:
                 raise Exception("Failed to initialize OpenAI client. Please check your API key.")
 
-    def process_brochure(self, file, file_type: str) -> Dict[str, List[str]]:
+    def process_brochure(self, file, file_type: str, product_name: str) -> Dict[str, List[str]]:
         """Process brochure file (PDF or Markdown)"""
         if file_type == 'pdf':
-            return self._process_pdf(file)
+            return self.process_pdf(file, product_name)
         elif file_type == 'markdown':
             content = file.getvalue().decode('utf-8')
             return self.process_markdown(content)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
 
-    def _process_pdf(self, file) -> Dict[str, List[str]]:
+    def process_pdf(self, file, product_name) -> Dict[str, List[str]]:
         """Process PDF using PyPDF2 and Vision API"""
         try:
             # Initialize OpenAI client if needed
@@ -72,24 +75,49 @@ class BrochureProcessor:
             
             # First try regular text extraction with PyPDF2
             pdf_reader = PyPDF2.PdfReader(file)
-            full_text = ""
+            full_text = f"Product Name: {product_name} "
             
-            # Extract text from all pages
+            # Extract text from all pages and do initial preprocessing
             for page in pdf_reader.pages:
                 text = page.extract_text()
                 if text:
+                    # Clean and preprocess the text
+                    text = self._preprocess_text(text)
                     full_text += text + "\n\n"
             
             if not full_text.strip():
                 raise Exception("No text could be extracted from the PDF")
+
+            # Extract car model first
+            car_model = self.extract_car_model(full_text)
+            if not car_model:
+                raise ValueError("Could not extract car model from content")
+            
+            # Reset sections
+            self.sections = {
+                "specifications": [],
+                "interior": [],
+                "technology": [],
+                "exterior": [],
+                "safety": [],
+                "performance": [],
+                "pricing": [],
+                "colors": []
+            }
+
+            # Extract key information first using regex patterns
+            extracted_info = self._extract_key_info(full_text)
+            
+            # Create a summarized version for OpenAI
+            summarized_text = self._create_summary(full_text, extracted_info)
             
             try:
-                # Use AI to extract structured information
+                # Use AI to extract structured information from the summary
                 response = self.client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-3.5-turbo",
                     messages=[{
                         "role": "user",
-                        "content": self.extraction_prompt + "\n\nText:\n" + full_text
+                        "content": self.extraction_prompt + "\n\nText:\n" + summarized_text
                     }],
                     temperature=0.5
                 )
@@ -97,29 +125,107 @@ class BrochureProcessor:
                 raise Exception(f"OpenAI API error: {str(e)}")
             
             # Parse AI response into sections
-            extracted_info = {key: [] for key in self.sections.keys()}
-            current_section = None
+            ai_extracted = self._parse_ai_response(response.choices[0].message.content)
             
-            for line in response.choices[0].message.content.split('\n'):
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Determine section
-                section = self._determine_section(line.lower())
-                if section:
-                    current_section = section
-                elif current_section and line.startswith(('•', '-', '*')):
-                    # Clean and add the bullet point
-                    clean_line = line.lstrip('•-* ').strip()
-                    if clean_line and clean_line not in extracted_info[current_section]:
-                        extracted_info[current_section].append(clean_line)
-            
-            return extracted_info
+            # Merge AI-extracted information with sections
+            self._merge_extracted_info(ai_extracted)
+            return self.sections
             
         except Exception as e:
             self.logger.error(f"Error processing PDF: {str(e)}")
             raise
+
+    def _preprocess_text(self, text: str) -> str:
+        """Clean and preprocess extracted text"""
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text)
+        # Remove special characters but keep necessary punctuation
+        text = re.sub(r'[^\w\s.,;:()\-]', '', text)
+        return text.strip()
+
+    def _extract_key_info(self, text: str) -> Dict[str, List[str]]:
+        """Extract key information using regex patterns"""
+        extracted = {
+            "specifications": [],
+            "pricing": [],
+            "colors": []
+        }
+        
+        # Example patterns (expand these based on your needs)
+        spec_patterns = [
+            r'(\d+(?:\.\d+)?)\s*(?:L|cc|hp|kW)',  # Engine specs
+            r'(\d+(?:\.\d+)?)\s*(?:mph|km/h)',    # Speed
+            r'(\d+(?:\.\d+)?)\s*(?:in|mm|cm)'     # Dimensions
+        ]
+        
+        price_patterns = [
+            # Dollar
+            r'\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'USD\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            # Euro
+            r'€\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'EUR\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            # Rupee
+            r'₹\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'Rs\.?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'INR\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            # Pound
+            r'£\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'GBP\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            # Generic price patterns
+            r'MSRP.*?([₹\$€£]\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'Price.*?([₹\$€£]\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'Cost.*?([₹\$€£]\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?)'
+        ]
+        
+        color_patterns = [
+            r'(?:available|exterior)\s+colors?[:\s]+([^.]+)',
+            r'(?:comes|available)\s+in\s+([^.]+?(?:black|white|silver|blue|red|gray|grey)[^.]+)'
+        ]
+        
+        # Extract matches for each pattern
+        for pattern in spec_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            extracted["specifications"].extend(matches)
+        
+        # Extract price matches
+        for pattern in price_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            # Clean up the matches and add currency symbol if not present
+            for match in matches:
+                if match:
+                    extracted["pricing"].append(match.strip())
+        
+        # Extract color matches
+        for pattern in color_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                clean_color = match.strip().rstrip('.,')
+                if clean_color:
+                    extracted["colors"].append(clean_color)
+        
+        return extracted
+
+    def _create_summary(self, full_text: str, extracted_info: Dict[str, List[str]]) -> str:
+        """Create a condensed summary of the text for OpenAI"""
+        # Start with extracted information
+        summary_parts = []
+        
+        # Add extracted specs
+        if extracted_info["specifications"]:
+            summary_parts.append("Specifications: " + ", ".join(extracted_info["specifications"]))
+        
+        # Add first few paragraphs (likely containing important information)
+        paragraphs = full_text.split('\n\n')[:3]
+        summary_parts.extend(paragraphs)
+        
+        # Add any sections with key terms
+        key_terms = ['safety', 'technology', 'interior', 'exterior', 'performance']
+        for para in paragraphs[3:]:
+            if any(term in para.lower() for term in key_terms):
+                summary_parts.append(para)
+        
+        return "\n\n".join(summary_parts)
 
     def extract_car_model(self, content: str) -> str:
         """
@@ -137,7 +243,8 @@ class BrochureProcessor:
         model_patterns = [
             r'Model:\s*([A-Za-z0-9\s]+)',
             r'Car Model:\s*([A-Za-z0-9\s]+)',
-            r'Vehicle:\s*([A-Za-z0-9\s]+)'
+            r'Vehicle:\s*([A-Za-z0-9\s]+)',
+            r'Product Name:\s*([A-Za-z0-9\s]+)',
         ]
         
         for pattern in model_patterns:
