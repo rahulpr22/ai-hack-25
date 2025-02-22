@@ -1,0 +1,30 @@
+from pydantic_settings import BaseSettings
+from typing import List, Optional
+from functools import lru_cache
+
+class Settings(BaseSettings):
+    # API Keys and Environment
+    OPENAI_API_KEY: str
+    PINECONE_API_KEY: str
+    PINECONE_ENVIRONMENT: str
+    PINECONE_INDEX_NAME: str = "car-sales-agent"
+    
+    # Web Scraping Configuration
+    ALLOWED_DOMAINS: List[str] = [
+        "cardekho.com"
+    ]
+    
+    SCRAPING_DELAY: int = 2  # Delay between requests in seconds
+    MAX_RETRIES: int = 3
+    
+    # Data Processing
+    CHUNK_SIZE: int = 500  # Size of text chunks for embedding
+    CHUNK_OVERLAP: int = 50
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings() 
