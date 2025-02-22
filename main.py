@@ -5,7 +5,6 @@ from src.pdf_processor import PDFProcessor
 def main():
     # Initialize components
     ui = BrochureUI()
-    pdf_processor = PDFProcessor()
     
     # Render header
     ui.render_header()
@@ -15,14 +14,15 @@ def main():
     
     if uploaded_file is not None:
         try:
-            # Show file details
-            ui.render_file_details(uploaded_file)
+            # Process and store document
+            status = ui.pdf_processor.process_and_store(uploaded_file)
             
-            # Extract and display text
-            text_content = pdf_processor.read_pdf_content(uploaded_file)
+            # Show processing status
+            ui.render_processing_status(status)
+            
+            # Show content and download button
+            text_content = ui.pdf_processor.read_pdf_content(uploaded_file)
             ui.render_content_display(text_content)
-            
-            # Add download button
             ui.render_download_button(text_content, uploaded_file.name)
             
         except Exception as e:
