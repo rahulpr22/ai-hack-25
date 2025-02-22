@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     PINECONE_INDEX_NAME: str = "imagine-dragons"
     PINECONE_ENVIRONMENT: str = "aws-starter"
     PERPLEXITY_API_KEY: str
-    
+    ELEVEN_LABS_API_KEY: str
     # Web Scraping Configuration
     ALLOWED_DOMAINS: List[str] = [
         "cardekho.com",

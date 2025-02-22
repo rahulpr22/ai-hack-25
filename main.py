@@ -1,15 +1,17 @@
 import streamlit as st
 import asyncio
+import os
 
 from src.data_ingestion import BrochureProcessor
 from src.data_ingestion.data_ingestion_orchestrator import DataIngestionOrchestrator
 from src.vector_store.vector_store import VectorStore
 from openai import OpenAI
 import tempfile
-import os
 from typing import List, Dict
 from dotenv import load_dotenv
 from src.config.config import get_settings
+from src.eleven_labs.conversational_ai import create_conversational_ai, get_agent_id
+import json
 
 # Load environment variables
 load_dotenv()
@@ -17,8 +19,7 @@ settings = get_settings()
 
 # Set page configuration
 st.set_page_config(
-    page_title="Car Sales Assistant",
-    page_icon="🚗",
+    page_title="Sales Assistant",
     layout="wide"
 )
 
@@ -35,7 +36,7 @@ async def render_ingestion_tab(processor: BrochureProcessor, vector_store: Vecto
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.header("📚 Knowledge Base Management")
+        st.header("📚 Add a New Product ")
         st.write("Upload car brochures with optional images")
         
         # File upload tabs
@@ -285,46 +286,85 @@ async def process_uploaded_file(file, file_type: str):
             os.unlink(tmp_file.name)
 
 async def render_chat_tab():
-    """Render the chat interface"""
-    st.header("💬 Chat with AI Sales Assistant")
+    """Render the chat interface with video and chat sections"""    
+    # Create two columns
+    col1, col2 = st.columns([1, 1])
     
-    # Initialize chat history
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # Chat input
-    if prompt := st.chat_input("Ask about car features, specifications, or comparisons..."):
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    # Video Column
+    with col1:
+        st.subheader("🎥 Product Showcase")
         
-        # Display user message
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # Get relevant car data from vector store
-        car_data = None
-        try:
-            results = await vector_store.search_car_data(query=prompt, top_k=5)
-            if results:
-                car_data = {}
-                for result in results:
-                    section = result.get('metadata', {}).get('section', 'general')
-                    if section not in car_data:
-                        car_data[section] = []
-                    car_data[section].append(result['text'])
-        except Exception as e:
-            st.warning(f"Could not retrieve car data: {str(e)}")
-
-        # Generate and display assistant response
-        with st.chat_message("assistant"):
-            response = generate_chat_response(st.session_state.messages, car_data)
-            st.markdown(response)
-            st.session_state.messages.append({"role": "assistant", "content": response})
+        # Ensure assets directory exists
+        assets_dir = "assets"
+        if not os.path.exists(assets_dir):
+            os.makedirs(assets_dir)
+        
+        # Get available video files
+        video_files = [f for f in os.listdir(assets_dir) if f.endswith(('.mp4', '.avi', '.mov'))]
+        
+        if not video_files:
+            # No videos found
+            st.warning("No video files found in assets folder")
+            st.info("""
+                Please add video files to the 'assets' folder.
+                Supported formats: .mp4, .avi, .mov
+            """)
+            # Display placeholder image or message
+            st.image("https://via.placeholder.com/400x300?text=No+Video+Available", use_container_width=True)
+        else:
+            # Initialize video path in session state if not exists or if current path is invalid
+            if ("video_path" not in st.session_state or 
+                not os.path.exists(st.session_state.video_path)):
+                st.session_state.video_path = os.path.join(assets_dir, video_files[0])
+            
+            # Add video selector
+            selected_video = st.selectbox(
+                "Select Video",
+                video_files,
+                index=video_files.index(os.path.basename(st.session_state.video_path)),
+                key="video_selector",
+                label_visibility="collapsed"
+            )
+            
+            # Update video path in session state
+            if selected_video:
+                st.session_state.video_path = os.path.join(assets_dir, selected_video)
+            
+            # Display video from local file
+            try:
+                with open(st.session_state.video_path, 'rb') as video_file:
+                    video_bytes = video_file.read()
+                    st.video(video_bytes)
+            except Exception as e:
+                st.error(f"Error loading video: {str(e)}")
+                st.info("Please make sure the video file exists and is not corrupted")
+                
+    # Chat Widget Column
+    with col2:
+        st.markdown("<h3 style='text-align: center;'>🤖 AI Sales Assistant</h3>", unsafe_allow_html=True)
+        if "user_name" not in st.session_state:
+            st.session_state.user_name = "John Doe"
+        
+        # eleven labs conversational ai integration
+        agent_id = get_agent_id("New agent")
+        dynamic_variables = {
+            "user_name": "John Doe"
+        }
+        widget = f"""
+            <elevenlabs-convai 
+                agent-id={agent_id}
+                dynamic-variables='{json.dumps(dynamic_variables)}'
+                style="display: flex; justify-content: center; align-items: center;"
+            </elevenlabs-convai>
+            <script src="https://elevenlabs.io/convai-widget/index.js" async type="text/javascript"></script>
+        """
+        columns = st.columns([1, 2, 1.3])
+        with columns[0]:
+            st.empty()
+        with columns[1]:
+            st.components.v1.html(widget)
+        with columns[2]:
+            st.empty()
 
 async def render_ingestion_tab():
     """Render the data ingestion tab"""
@@ -409,10 +449,10 @@ async def render_ingestion_tab():
                     progress_bar.empty()
 
 def main():
-    st.title("🚗 AI Car Sales Assistant")
+    st.title("Sales Assistant")
     
     # Create tabs
-    tabs = st.tabs(["💬 Chat", "📚 Knowledge Base"])
+    tabs = st.tabs(["💬 Chat", "📚 Add a New Product"])
     
     # Chat Tab
     with tabs[0]:
