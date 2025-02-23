@@ -10,6 +10,8 @@ from openai import OpenAI
 import logging
 import PyPDF2
 from ..config.config import get_settings
+from .web_scraper import CarWebScraper
+import asyncio
 
 settings = get_settings()  # Get settings in constructor
 
@@ -26,7 +28,9 @@ class BrochureProcessor:
             "safety": [],
             "performance": [],
             "pricing": [],
-            "colors": []
+            "colors": [],
+            "engine": [],
+            "customer-reviews": [],
         }
         
         self.extraction_prompt = """Extract detailed car information from this text into these categories:
@@ -38,9 +42,12 @@ class BrochureProcessor:
         6. Performance details
         7. Pricing information
         8. Available colors
+        9. Customer Reviews
 
         Format the information in clear, structured bullet points. If certain information is not found, skip that category.
         Be very specific and accurate with technical details, numbers, and features."""
+
+        self.web_scraper = CarWebScraper()
 
     def _ensure_client(self):
         """Ensure OpenAI client is initialized"""
@@ -57,18 +64,15 @@ class BrochureProcessor:
             except Exception as e:
                 raise Exception("Failed to initialize OpenAI client. Please check your API key.")
 
-    def process_brochure(self, file, file_type: str, product_name: str) -> Dict[str, List[str]]:
+    async def process_brochure(self, file, file_type: str, product_name: str) -> Dict[str, List[str]]:
         """Process brochure file (PDF or Markdown)"""
         if file_type == 'pdf':
-            return self.process_pdf(file, product_name)
-        elif file_type == 'markdown':
-            content = file.getvalue().decode('utf-8')
-            return self.process_markdown(content)
+            return await self.process_pdf(file, product_name)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
 
-    def process_pdf(self, file, product_name) -> Dict[str, List[str]]:
-        """Process PDF using PyPDF2 and Vision API"""
+    async def process_pdf(self, file, product_name) -> Dict[str, List[str]]:
+        """Process PDF and enhance with web-scraped data"""
         try:
             # Initialize OpenAI client if needed
             self._ensure_client()
@@ -77,60 +81,32 @@ class BrochureProcessor:
             pdf_reader = PyPDF2.PdfReader(file)
             full_text = f"Product Name: {product_name} "
             
-            # Extract text from all pages and do initial preprocessing
+            # Extract text from PDF
             for page in pdf_reader.pages:
                 text = page.extract_text()
                 if text:
-                    # Clean and preprocess the text
                     text = self._preprocess_text(text)
                     full_text += text + "\n\n"
             
             if not full_text.strip():
                 raise Exception("No text could be extracted from the PDF")
 
-            # Extract car model first
+            # Extract car model
             car_model = self.extract_car_model(full_text)
             if not car_model:
                 raise ValueError("Could not extract car model from content")
-            
-            # Reset sections
-            self.sections = {
-                "specifications": [],
-                "interior": [],
-                "technology": [],
-                "exterior": [],
-                "safety": [],
-                "performance": [],
-                "pricing": [],
-                "colors": []
-            }
 
-            # Extract key information first using regex patterns
-            extracted_info = self._extract_key_info(full_text)
-            
-            # Create a summarized version for OpenAI
-            summarized_text = self._create_summary(full_text, extracted_info)
-            
-            try:
-                # Use AI to extract structured information from the summary
-                response = self.client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[{
-                        "role": "user",
-                        "content": self.extraction_prompt + "\n\nText:\n" + summarized_text
-                    }],
-                    temperature=0.5
-                )
-            except Exception as e:
-                raise Exception(f"OpenAI API error: {str(e)}")
-            
-            # Parse AI response into sections
-            ai_extracted = self._parse_ai_response(response.choices[0].message.content)
-            
-            # Merge AI-extracted information with sections
-            self._merge_extracted_info(ai_extracted)
-            return self.sections
-            
+            # Process the extracted text with OpenAI to get structured data
+            brochure_data = self._extract_structured_data(full_text)
+
+            # Enhance data with web scraping
+            enhanced_data = await self.web_scraper.scrape_car_data(car_model, brochure_data)
+
+            # Merge brochure and web data
+            final_data = self._merge_data(brochure_data, enhanced_data)
+
+            return final_data
+
         except Exception as e:
             self.logger.error(f"Error processing PDF: {str(e)}")
             raise
@@ -418,4 +394,68 @@ class BrochureProcessor:
             }
             
         except Exception as e:
-            raise Exception(f"Error processing image: {str(e)}") 
+            raise Exception(f"Error processing image: {str(e)}")
+
+    def _merge_data(self, brochure_data: Dict[str, List[str]], web_data: Dict[str, List[str]]) -> Dict[str, List[str]]:
+        """Merge brochure data with web-scraped data, removing duplicates"""
+        merged_data = {}
+        
+        for key in brochure_data.keys():
+            # Combine lists and remove duplicates while preserving order
+            merged_data[key] = list(dict.fromkeys(brochure_data[key] + web_data.get(key, [])))
+            
+        return merged_data 
+
+    def _extract_structured_data(self, text: str) -> Dict[str, List[str]]:
+        """Extract structured data from text using OpenAI"""
+        try:
+            # Initialize sections
+            structured_data = {
+                "specifications": [],
+                "interior": [],
+                "technology": [],
+                "exterior": [],
+                "safety": [],
+                "performance": [],
+                "pricing": [],
+                "colors": []
+            }
+
+            # Extract key information first using regex patterns
+            extracted_info = self._extract_key_info(text)
+            
+            # Create a summarized version for OpenAI
+            summarized_text = self._create_summary(text, extracted_info)
+            
+            # Use AI to extract structured information from the summary
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{
+                    "role": "user",
+                    "content": self.extraction_prompt + "\n\nText:\n" + summarized_text
+                }],
+                temperature=0.5
+            )
+
+            # Parse AI response into sections
+            ai_extracted = self._parse_ai_response(response.choices[0].message.content)
+            
+            # Merge AI-extracted information with sections
+            for section, items in ai_extracted.items():
+                if section in structured_data:
+                    structured_data[section].extend(items)
+
+            # Add regex-extracted information
+            for key, items in extracted_info.items():
+                if key in structured_data:
+                    structured_data[key].extend(items)
+
+            # Remove duplicates while preserving order
+            for key in structured_data:
+                structured_data[key] = list(dict.fromkeys(structured_data[key]))
+
+            return structured_data
+
+        except Exception as e:
+            self.logger.error(f"Error extracting structured data: {str(e)}")
+            raise 
