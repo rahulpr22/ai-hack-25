@@ -165,7 +165,7 @@ async def render_ingestion_tab(processor: BrochureProcessor, vector_store: Vecto
                     try:
                         # Process PDF
                         with st.spinner("Processing PDF..."):
-                            car_data = processor.process_pdf(uploaded_pdf, product_name)
+                            car_data = await processor.process_pdf(uploaded_pdf, product_name)
 
                         # Upsert car data
                         with st.spinner("Storing car data in database..."):
