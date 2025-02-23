@@ -2,6 +2,18 @@
 
 A sophisticated data ingestion system that processes car brochures and scrapes web data to create a comprehensive knowledge base for an AI car sales agent.
 
+## System Architecture
+
+![Sales Agent Architecture](images/Sales%20Agent.png)
+
+The system architecture shows the flow of data and interactions between different components:
+- Merchants can upload product brochures
+- Users interact with an AI Salesman through the Streamlit frontend
+- The backend processes documents and videos using Perplexity AI and FAL AI
+- Eleven Labs provides AI voice generation
+- Data is stored in Pinecone vector database
+- RAG (Retrieval Augmented Generation) is used for enhanced responses
+
 ## Features
 
 - Markdown brochure processing
