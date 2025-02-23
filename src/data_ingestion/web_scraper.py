@@ -523,7 +523,7 @@ Format each point as a detailed bullet point with the • symbol. Include both t
 
     async def _query_perplexity(self, query: str) -> Optional[str]:
         """
-        Make a single query to Perplexity.ai API
+        Make a single query to Perplexity.ai API with maximum context
         """
         try:
             self.logger.debug("Preparing Perplexity API request")
@@ -545,16 +545,21 @@ Format each point as a detailed bullet point with the • symbol. Include both t
 8. Maintain consistent formatting and section organization
 9. Focus on factual information rather than marketing language
 10. Include regional variations when applicable (features, pricing, availability)
+11. Provide extensive real-world examples and user experiences
+12. Include detailed technical specifications and measurements
+13. Add context about market positioning and historical evolution
+14. Reference specific trim levels and variant-specific information
+15. Include maintenance and long-term ownership insights
 
-Always verify information from multiple sources and indicate if certain details might vary by market or model year."""
+Provide as much detailed information as possible, including specific examples, numbers, and comparisons. Don't summarize - give complete, detailed responses."""
                     },
                     {
                         "role": "user",
                         "content": query
                     }
                 ],
-                "temperature": 0.5,
-                "max_tokens": 1500
+                "temperature": 0.7,
+                "max_tokens": 4000  # Increased token limit for more detailed responses
             }
             
             self.logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
@@ -694,21 +699,49 @@ Always verify information from multiple sources and indicate if certain details 
 
     async def _get_competitor_info(self, car_model: str) -> Dict[str, List[Dict]]:
         """
-        Get information about competitors in same, upper, and lower segments
+        Get comprehensive information about competitors in same, upper, and lower segments
         """
         try:
-            # First, get the segment and price information for our car
-            segment_query = f"""What is the exact segment and price range of {car_model}? 
-            Also list all direct competitors in the same price segment, 
-            competitors in one segment above (premium alternatives), 
-            and competitors in one segment below (budget alternatives). 
-            Format as bullet points with exact price ranges."""
+            # First, get detailed segment and competitor information
+            segment_query = f"""Provide extremely detailed information about {car_model}'s market positioning and competitors:
+
+1. Exact segment details:
+• Precise segment classification
+• Price range boundaries
+• Target audience demographics
+• Segment characteristics and expectations
+
+2. Direct competitors (same segment):
+• List all competing models with exact price ranges
+• Market share and sales data
+• Key feature comparisons
+• Target audience overlap
+
+3. Premium alternatives (segment above):
+• List all relevant models with price ranges
+• Additional features and premium offerings
+• Brand value comparison
+• Target audience differences
+
+4. Budget alternatives (segment below):
+• List all relevant models with price ranges
+• Feature trade-offs
+• Value proposition
+• Target audience differences
+
+5. Segment trends:
+• Current market dynamics
+• Consumer preferences
+• Technology adoption
+• Regulatory impacts
+
+Provide comprehensive details for each point, including specific model names, prices, features, and market data."""
             
             segment_info = await self._query_perplexity(segment_query)
             if not segment_info:
                 return {}
 
-            # Now get detailed comparison for each competitor
+            # Get detailed comparison for each competitor
             competitors = {
                 "same_segment": [],
                 "upper_segment": [],
@@ -716,17 +749,78 @@ Always verify information from multiple sources and indicate if certain details 
             }
 
             for segment_type in competitors.keys():
-                comparison_query = f"""Compare {car_model} with its {segment_type.replace('_', ' ')} competitors.
-                For each competitor, provide:
-                • Model name and price range
-                • Key advantages over {car_model}
-                • Key disadvantages compared to {car_model}
-                • Unique features and selling points
-                • Performance comparison
-                • Feature-by-feature comparison
-                • Value for money analysis
-                • Customer satisfaction and reliability comparison
-                Format as detailed bullet points."""
+                comparison_query = f"""Provide an extremely detailed comparison between {car_model} and its {segment_type.replace('_', ' ')} competitors. For each competitor model, include:
+
+1. Basic Information:
+• Full model name and variant details
+• Exact price range for all trim levels
+• Launch date and model year
+• Available body styles
+
+2. Technical Comparison:
+• Detailed engine specifications
+• Transmission options
+• Performance figures
+• Fuel efficiency data
+• Platform and architecture
+
+3. Feature Analysis:
+• Complete feature list comparison
+• Trim-level specific features
+• Standard vs optional equipment
+• Unique/exclusive features
+• Missing features compared to {car_model}
+
+4. Space and Dimensions:
+• External dimensions
+• Interior space measurements
+• Cargo capacity
+• Ground clearance
+• Weight comparison
+
+5. Safety and Technology:
+• Safety ratings
+• Safety feature list
+• Infotainment capabilities
+• Driver assistance systems
+• Connected car features
+
+6. Ownership Experience:
+• Warranty coverage
+• Service costs
+• Spare part prices
+• Insurance costs
+• Resale value trends
+
+7. Real-world Performance:
+• Actual fuel efficiency
+• Reliability data
+• Common issues
+• Maintenance requirements
+• User reviews and ratings
+
+8. Market Performance:
+• Sales figures
+• Market share
+• Customer satisfaction scores
+• Expert reviews and ratings
+• Awards and recognition
+
+9. Detailed Advantages/Disadvantages:
+• Feature advantages
+• Performance advantages
+• Value advantages
+• Brand advantages
+• After-sales advantages
+
+10. Long-term Ownership Insights:
+• 5-year ownership costs
+• Common problems and solutions
+• Aging characteristics
+• Long-term reliability
+• Community feedback
+
+Provide comprehensive details for each point, including specific numbers, measurements, and real-world examples."""
 
                 comparison_data = await self._query_perplexity(comparison_query)
                 if comparison_data:
@@ -740,34 +834,74 @@ Always verify information from multiple sources and indicate if certain details 
 
     def _parse_competitor_data(self, comparison_data: str) -> List[Dict]:
         """
-        Parse competitor comparison data into structured format
+        Parse detailed competitor comparison data into structured format
         """
         competitors = []
         current_competitor = {}
         current_section = None
+        current_subsection = None
 
         for line in comparison_data.split('\n'):
             line = line.strip()
+            
+            # Skip empty lines unless they're section separators
             if not line:
-                if current_competitor:
-                    competitors.append(current_competitor)
+                if current_competitor and len(current_competitor) > 0:
+                    competitors.append(current_competitor.copy())
                     current_competitor = {}
+                current_section = None
+                current_subsection = None
                 continue
 
+            # Handle numbered sections (1., 2., etc.)
+            if re.match(r'^\d+\.', line):
+                current_section = line.split('.', 1)[1].strip().lower().replace(' ', '_')
+                current_subsection = None
+                if current_section not in current_competitor:
+                    current_competitor[current_section] = {}
+                continue
+
+            # Handle bullet points
             if line.startswith('•'):
                 item = line.lstrip('• ').strip()
+                
+                # Handle key-value pairs
                 if ':' in item:
                     key, value = item.split(':', 1)
-                    current_competitor[key.strip().lower().replace(' ', '_')] = value.strip()
+                    key = key.strip().lower().replace(' ', '_')
+                    value = value.strip()
+                    
+                    if current_subsection:
+                        if isinstance(current_competitor[current_section], dict):
+                            if current_subsection not in current_competitor[current_section]:
+                                current_competitor[current_section][current_subsection] = {}
+                            current_competitor[current_section][current_subsection][key] = value
+                    else:
+                        if isinstance(current_competitor[current_section], dict):
+                            current_competitor[current_section][key] = value
+                        else:
+                            current_competitor[current_section] = {key: value}
                 else:
+                    # Handle plain bullet points
                     if current_section:
-                        if current_section not in current_competitor:
-                            current_competitor[current_section] = []
-                        current_competitor[current_section].append(item)
+                        if current_subsection:
+                            if isinstance(current_competitor[current_section], dict):
+                                if current_subsection not in current_competitor[current_section]:
+                                    current_competitor[current_section][current_subsection] = []
+                                current_competitor[current_section][current_subsection].append(item)
+                        else:
+                            if isinstance(current_competitor[current_section], dict):
+                                if 'details' not in current_competitor[current_section]:
+                                    current_competitor[current_section]['details'] = []
+                                current_competitor[current_section]['details'].append(item)
+                            else:
+                                current_competitor[current_section] = [item]
             else:
-                current_section = line.lower().replace(' ', '_')
+                # Handle subsections
+                current_subsection = line.lower().replace(' ', '_')
 
-        if current_competitor:
+        # Add the last competitor if exists
+        if current_competitor and len(current_competitor) > 0:
             competitors.append(current_competitor)
 
         return competitors 
