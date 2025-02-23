@@ -4,7 +4,7 @@ A sophisticated data ingestion system that processes car brochures and scrapes w
 
 ## System Architecture
 
-![Sales Agent Architecture](images/Sales%20Agent.png)
+![Sales Agent Architecture](sales.png)
 
 The system architecture shows the flow of data and interactions between different components:
 - Merchants can upload product brochures
