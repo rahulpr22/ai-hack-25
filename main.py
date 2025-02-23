@@ -205,7 +205,7 @@ def play_videos(video_files):
                 break
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             video_placeholder.image(frame, channels="RGB")
-            time.sleep(1/30)  # Adjust frame rate to match video
+            time.sleep(1/60)  # Adjust frame rate to match video
         
         cap.release()
         video_index = (video_index + 1) % len(video_files)
@@ -384,14 +384,14 @@ async def main():
 
     tabs = st.tabs(["💬 Chat", "📚 Add a New Product", "🎥 Create Video"])
 
-    with tabs[0]:
-        await render_chat_tab()
-
     with tabs[1]:
         await render_ingestion_tab(processor, vector_store, video_processor)
         
     with tabs[2]:
         await render_video_tab(video_processor)
+    
+    with tabs[0]:
+        await render_chat_tab()
 
 
 if __name__ == "__main__":
