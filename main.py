@@ -10,6 +10,8 @@ from src.data_ingestion.brochure_processor import BrochureProcessor
 from src.data_ingestion.video_processor import VideoProcessor
 from src.eleven_labs.conversational_ai import get_agent_id
 from src.vector_store import VectorStore
+import threading
+
 
 settings = get_settings()
 # Set page configuration
@@ -118,6 +120,10 @@ st.markdown("""
     .stFileUploader > div[data-testid="stFileUploader"] {
         padding-top: 0;
     }
+
+    video {
+        playbackRate: 0.5 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -173,86 +179,72 @@ async def render_ingestion_tab(processor: BrochureProcessor, vector_store: Vecto
                     except Exception as e:
                         st.error(f"Error processing data: {str(e)}")
 
+import cv2
+import os
+import time
+
+# Function to get all video files from a folder
+def get_video_files(folder):
+    return [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(('.mp4', '.avi', '.mov'))]
+
+# Function to play videos continuously
+def play_videos(video_files):
+    if not video_files:
+        st.error("No video files found in the folder!")
+        return
+    
+    video_index = 0
+    video_placeholder = st.empty()
+    while True:
+        video_path = video_files[video_index]
+        cap = cv2.VideoCapture(video_path)
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            video_placeholder.image(frame, channels="RGB")
+            time.sleep(1/30)  # Adjust frame rate to match video
+        
+        cap.release()
+        video_index = (video_index + 1) % len(video_files)
+
 async def render_chat_tab():
     """Render the chat interface with video and chat sections"""
     # Create two columns
     col1, col2 = st.columns([1, 1])
 
-    # Video Column
-    with col1:
-        st.subheader("🎥 Product Showcase")
-
-        # Ensure assets directory exists
-        assets_dir = "assets"
-        if not os.path.exists(assets_dir):
-            os.makedirs(assets_dir)
-
-        # Get available video files
-        video_files = [f for f in os.listdir(assets_dir) if f.endswith(('.mp4', '.avi', '.mov'))]
-
-        if not video_files:
-            # No videos found
-            st.warning("No video files found in assets folder")
-            st.info("""
-                Please add video files to the 'assets' folder.
-                Supported formats: .mp4, .avi, .mov
-            """)
-            # Display placeholder image or message
-            st.image("https://via.placeholder.com/400x300?text=No+Video+Available", use_container_width=True)
-        else:
-            # Initialize video path in session state if not exists or if current path is invalid
-            if ("video_path" not in st.session_state or
-                not os.path.exists(st.session_state.video_path)):
-                st.session_state.video_path = os.path.join(assets_dir, video_files[0])
-
-            # Add video selector
-            selected_video = st.selectbox(
-                "Select Video",
-                video_files,
-                index=video_files.index(os.path.basename(st.session_state.video_path)),
-                key="video_selector",
-                label_visibility="collapsed"
-            )
-
-            # Update video path in session state
-            if selected_video:
-                st.session_state.video_path = os.path.join(assets_dir, selected_video)
-
-            # Display video from local file
-            try:
-                with open(st.session_state.video_path, 'rb') as video_file:
-                    video_bytes = video_file.read()
-                    st.video(video_bytes)
-            except Exception as e:
-                st.error(f"Error loading video: {str(e)}")
-                st.info("Please make sure the video file exists and is not corrupted")
-
-    # Chat Widget Column
     with col2:
         st.markdown("<h3 style='text-align: center;'>🤖 AI Sales Assistant</h3>", unsafe_allow_html=True)
         if "user_name" not in st.session_state:
-            st.session_state.user_name = "John Doe"
+            st.session_state.user_name = "Karthik"
 
         # eleven labs conversational ai integration
         agent_id = get_agent_id("New agent")
         dynamic_variables = {
-            "user_name": "John Doe"
+            "user_name": st.session_state.user_name
         }
         widget = f"""
             <elevenlabs-convai 
                 agent-id={agent_id}
                 dynamic-variables='{json.dumps(dynamic_variables)}'
-                style="display: flex; justify-content: center; align-items: center;"
             </elevenlabs-convai>
             <script src="https://elevenlabs.io/convai-widget/index.js" async type="text/javascript"></script>
         """
-        columns = st.columns([1, 2, 1.3])
-        with columns[0]:
-            st.empty()
-        with columns[1]:
-            st.components.v1.html(widget)
-        with columns[2]:
-            st.empty()
+        st.components.v1.html(widget)
+
+    
+        # Video Column
+    with col1:
+        st.subheader("🎥 Product Showcase")
+        folder = "videos"  # Set the default folder containing videos
+        video_files = get_video_files(folder)
+        if video_files:
+            play_videos(video_files)
+        else:
+            st.error("No video files found in the specified folder.")
+
 
 async def render_video_tab(video_processor: VideoProcessor):
     """Render the video creation tab"""
@@ -375,6 +367,10 @@ async def render_video_tab(video_processor: VideoProcessor):
                     st.error(f"Error processing images: {str(e)}")
 
 async def main():
+    # Create videos directory if it doesn't exist
+    videos_dir = os.path.join(os.getcwd(), "videos")
+    os.makedirs(videos_dir, exist_ok=True)
+    
     st.title("Sales Assistant")
 
     try:
