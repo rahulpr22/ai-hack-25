@@ -31,23 +31,41 @@ class CarWebScraper:
         }
         self.openai_client = OpenAI(api_key=settings.OPENAI_GPT_KEY)
         self.logger.debug("Initialized CarWebScraper with Perplexity and OpenAI clients")
+        # Add competitor analysis sections to car_data structure
+        self.default_sections = {
+            "specifications": [],
+            "interior": [],
+            "technology": [],
+            "exterior": [],
+            "safety": [],
+            "performance": [],
+            "pricing": [],
+            "colors": [],
+            "competitors_same_segment": [],
+            "competitors_upper_segment": [],
+            "competitors_lower_segment": [],
+            "comparative_analysis": []
+        }
         self.search_urls = {
             "cardekho": {
                 "base": "https://www.cardekho.com/cars/{model}",
                 "specs": "https://www.cardekho.com/cars/{model}/specifications",
                 "features": "https://www.cardekho.com/cars/{model}/features",
                 "colors": "https://www.cardekho.com/cars/{model}/colors",
-                "search": "https://www.cardekho.com/search/results?q={query}"
+                "search": "https://www.cardekho.com/search/results?q={query}",
+                "compare": "https://www.cardekho.com/compare-cars/{models}"
             },
             "carwale": {
                 "base": "https://www.carwale.com/{model}",
                 "specs": "https://www.carwale.com/{model}/specifications",
                 "features": "https://www.carwale.com/{model}/features",
-                "search": "https://www.carwale.com/search/?q={query}"
+                "search": "https://www.carwale.com/search/?q={query}",
+                "compare": "https://www.carwale.com/compare-cars/{models}"
             },
             "autocarindia": {
                 "base": "https://www.autocarindia.com/cars/{model}",
-                "search": "https://www.autocarindia.com/search?q={query}"
+                "search": "https://www.autocarindia.com/search?q={query}",
+                "compare": "https://www.autocarindia.com/car-comparison/{models}"
             }
         }
 
@@ -101,55 +119,68 @@ class CarWebScraper:
 
     async def scrape_car_data(self, car_model: str, brochure_data: Dict[str, List[str]] = None) -> Dict[str, List[str]]:
         """
-        Use RAG with Perplexity.ai to gather detailed car information
+        Use RAG with Perplexity.ai to gather detailed car information including competitor analysis
         """
         self.logger.info(f"Starting car data scraping for model: {car_model}")
         
-        car_data = {
-            "specifications": [],
-            "interior": [],
-            "technology": [],
-            "exterior": [],
-            "safety": [],
-            "performance": [],
-            "pricing": [],
-            "colors": []
-        }
+        car_data = self.default_sections.copy()
 
         try:
             async with self as scraper:
+                # Get competitor information first
+                competitor_info = await self._get_competitor_info(car_model)
+                if competitor_info:
+                    car_data["competitors_same_segment"] = competitor_info.get("same_segment", [])
+                    car_data["competitors_upper_segment"] = competitor_info.get("upper_segment", [])
+                    car_data["competitors_lower_segment"] = competitor_info.get("lower_segment", [])
+
+                    # Generate comparative analysis
+                    comparative_query = f"""Based on the competitor analysis, provide a detailed comparative analysis of {car_model} including:
+                    • Overall market positioning
+                    • Value proposition
+                    • Competitive advantages and disadvantages
+                    • Best use cases and target audience
+                    • Price-to-feature ratio analysis
+                    • Long-term ownership comparison
+                    • Resale value comparison
+                    • Customer satisfaction comparison
+                    Format as detailed bullet points."""
+
+                    comparative_analysis = await self._query_perplexity(comparative_query)
+                    if comparative_analysis:
+                        car_data["comparative_analysis"] = [line.lstrip('• ').strip() 
+                            for line in comparative_analysis.split('\n') 
+                            if line.strip().startswith('•')]
+
                 # Process brochure data using RAG
                 if brochure_data:
-                    # Create chunks and embeddings from brochure data
                     chunks = self._create_chunks(brochure_data)
                     chunk_embeddings = self._get_embeddings([chunk["text"] for chunk in chunks])
                     
-                    # Generate section-specific queries and retrieve relevant context
                     for section in car_data.keys():
-                        query = self._generate_section_query(car_model, section)
-                        query_embedding = self._get_embeddings([query])[0]
-                        
-                        # Get most relevant chunks for this section
-                        relevant_chunks = self._get_relevant_chunks(
-                            query_embedding, 
-                            chunk_embeddings, 
-                            chunks, 
-                            top_k=3
-                        )
-                        
-                        # Create augmented query with relevant context
-                        augmented_query = self._create_augmented_query(
-                            car_model,
-                            section,
-                            relevant_chunks
-                        )
-                        
-                        # Get information from Perplexity with augmented query
-                        self.logger.info(f"Sending augmented request for section: {section}")
-                        result = await self._query_perplexity(augmented_query)
-                        
-                        if result:
-                            self._parse_section_response(result, car_data, section)
+                        if section not in ["competitors_same_segment", "competitors_upper_segment", 
+                                         "competitors_lower_segment", "comparative_analysis"]:
+                            query = self._generate_section_query(car_model, section)
+                            query_embedding = self._get_embeddings([query])[0]
+                            
+                            relevant_chunks = self._get_relevant_chunks(
+                                query_embedding, 
+                                chunk_embeddings, 
+                                chunks, 
+                                top_k=3
+                            )
+                            
+                            augmented_query = self._create_augmented_query(
+                                car_model,
+                                section,
+                                relevant_chunks
+                            )
+                            
+                            self.logger.info(f"Sending augmented request for section: {section}")
+                            result = await self._query_perplexity(augmented_query)
+                            
+                            if result:
+                                self._parse_section_response(result, car_data, section)
                 else:
                     # If no brochure data, use basic query
                     query = self._generate_comprehensive_query(car_model)
@@ -224,19 +255,98 @@ class CarWebScraper:
 
     def _generate_section_query(self, car_model: str, section: str) -> str:
         """
-        Generate a focused query for a specific section
+        Generate a focused query for a specific section with detailed sub-questions
         """
         section_prompts = {
-            "specifications": f"What are the technical specifications and dimensions of the {car_model}?",
-            "interior": f"What are the interior features and comfort options in the {car_model}?",
-            "technology": f"What technology and infotainment features does the {car_model} have?",
-            "exterior": f"What are the exterior design features of the {car_model}?",
-            "safety": f"What safety features and systems does the {car_model} have?",
-            "performance": f"What are the performance capabilities of the {car_model}?",
-            "pricing": f"What is the pricing structure for the {car_model}?",
-            "colors": f"What colors and finishes are available for the {car_model}?"
+            "specifications": f"""Provide extremely detailed technical specifications for the {car_model}, including:
+• Complete engine specifications (displacement, cylinders, valvetrain, compression ratio)
+• Detailed dimensions (length, width, height, wheelbase, track width, ground clearance)
+• Transmission details (type, gear ratios, shift mechanism)
+• Chassis and suspension specifications
+• Brake system specifications
+• Wheel and tire specifications
+• Weight details (kerb weight, gross weight, payload)
+• Fuel system specifications
+• Performance figures (power, torque, acceleration, top speed)""",
+
+            "interior": f"""Describe in detail all interior features of the {car_model}, including:
+• Seating configuration and materials
+• Interior dimensions (headroom, legroom, shoulder room)
+• Dashboard and instrument panel layout
+• Storage solutions and cargo space
+• Climate control system
+• Interior lighting
+• Sound insulation and NVH levels
+• Premium features and materials
+• Ergonomics and comfort features""",
+
+            "technology": f"""List all technology features in the {car_model}, including:
+• Infotainment system specifications
+• Display screens and their capabilities
+• Connectivity options (Bluetooth, USB, wireless)
+• Sound system details
+• Driver assistance technologies
+• Navigation system
+• Voice control capabilities
+• Smartphone integration
+• Digital services and connected features""",
+
+            "exterior": f"""Detail all exterior features of the {car_model}, including:
+• Design language and styling elements
+• Lighting system (headlamps, DRLs, tail lamps)
+• Aerodynamic features
+• Body construction and materials
+• Paint technology and protection
+• Glass specifications
+• Door and mirror features
+• Wheel designs and sizes
+• Special exterior packages""",
+
+            "safety": f"""Provide comprehensive safety information for the {car_model}, including:
+• Active safety systems
+• Passive safety features
+• Airbag configuration and coverage
+• Crash test ratings and results
+• Child safety features
+• Security systems
+• Emergency response features
+• Driver assistance safety features
+• Structural safety elements""",
+
+            "performance": f"""Detail the complete performance capabilities of the {car_model}, including:
+• Engine performance characteristics
+• Acceleration and speed figures
+• Handling and dynamics
+• Braking performance
+• Fuel efficiency
+• Driving modes
+• Performance upgrades
+• Real-world performance data
+• Track/off-road capabilities""",
+
+            "pricing": f"""Provide detailed pricing information for the {car_model}, including:
+• Trim level pricing
+• Optional package costs
+• Warranty and service package pricing
+• Insurance cost estimates
+• Financing options
+• Maintenance cost estimates
+• Resale value projections
+• Regional price variations
+• Current offers and incentives""",
+
+            "colors": f"""Detail all color options for the {car_model}, including:
+• Available exterior colors
+• Interior color schemes
+• Special edition colors
+• Color pricing differences
+• Popular color choices
+• Color-specific features
+• Paint protection options
+• Special finish options
+• Color availability by trim"""
         }
-        return section_prompts.get(section, f"Tell me about the {section} of the {car_model}")
+        return section_prompts.get(section, f"Tell me everything about the {section} of the {car_model}")
 
     def _create_augmented_query(
         self,
@@ -273,57 +383,147 @@ Focus specifically on {section}-related features and specifications.
 
     def _generate_comprehensive_query(self, car_model: str) -> str:
         """
-        Generate a single comprehensive query that covers all aspects
+        Generate a comprehensive query that covers all possible customer questions
         """
-        # Base query structure
-        query = f"""Please provide detailed information about the {car_model} car model. Structure your response using these exact headers and bullet points for each feature:
+        return f"""Please provide extremely detailed information about the {car_model} car model, answering every possible question a customer might ask a car salesman. Structure your response using these exact headers and bullet points:
 
 SPECIFICATIONS:
-• Engine details
-• Dimensions
-• Technical specifications
+• What are the exact engine specifications (displacement, cylinders, configuration)?
+• What are the detailed dimensions (length, width, height, wheelbase, ground clearance)?
+• What is the fuel tank capacity and fuel efficiency (city/highway)?
+• What are the transmission options and their gear ratios?
+• What is the boot space/cargo capacity?
+• What is the kerb weight and gross vehicle weight?
+• What are the brake specifications (front/rear)?
+• What are the tire and wheel specifications?
 
 INTERIOR:
-• Cabin features
-• Comfort options
-• Seating
+• What materials are used for the seats and dashboard?
+• How many passengers can it accommodate?
+• What is the legroom and headroom in front and rear seats?
+• What are the seat adjustment options?
+• What storage compartments are available?
+• What is the quality of interior fit and finish?
+• What interior color options are available?
+• What are the comfort features for different weather conditions?
 
 TECHNOLOGY:
-• Infotainment
-• Connectivity
-• Driver assistance
+• What is the infotainment system specification?
+• What smartphone connectivity options are available?
+• What is the sound system configuration?
+• What driver assistance features are included?
+• What are the display screens and their sizes?
+• What are the charging/USB port locations?
+• What smart/connected car features are available?
+• What are the instrument cluster features?
 
 EXTERIOR:
-• Design elements
-• Styling features
-• Body characteristics
+• What are the signature design elements?
+• What are the lighting specifications (headlamps, taillamps, DRLs)?
+• What aerodynamic features are incorporated?
+• What are the special exterior styling elements?
+• What are the window and sunroof specifications?
+• What are the door handle and mirror features?
+• What are the wheel design options?
+• What are the paint quality and protection features?
 
 SAFETY:
-• Safety features
-• Ratings
-• Protection systems
+• What active safety features are included?
+• What passive safety features are present?
+• What are the airbag configurations?
+• What are the crash test ratings?
+• What child safety features are available?
+• What security features are included?
+• What are the brake assist and stability features?
+• What are the parking assistance features?
 
 PERFORMANCE:
-• Engine performance
-• Driving capabilities
-• Efficiency
+• What is the engine power and torque output?
+• What is the acceleration (0-60/100) time?
+• What is the top speed?
+• What are the different driving modes?
+• How does it handle in different conditions?
+• What is the braking performance?
+• What is the suspension setup?
+• What is the fuel efficiency in real-world conditions?
 
 PRICING:
-• Price range
-• Trim levels
-• Available packages
+• What are the different trim levels and their prices?
+• What warranty packages are available?
+• What service packages are offered?
+• What are the insurance costs?
+• What are the available financing options?
+• What are the maintenance costs?
+• What are the optional package costs?
+• What are the dealership offers and discounts?
 
 COLORS:
-• Exterior colors
-• Interior colors
-• Special finishes
-"""
-        
-        return query
+• What exterior colors are available?
+• What interior color combinations are offered?
+• What are the premium/special edition colors?
+• What are the most popular color choices?
+• What are the color-specific maintenance tips?
+• What are the color pricing differences?
+• What are the color availability by trim level?
+• What are the special finish options?
+
+OWNERSHIP EXPERIENCE:
+• What is the expected resale value?
+• What are the maintenance intervals?
+• What are common owner reviews and feedback?
+• What are the pros and cons compared to competitors?
+• What are the known issues or recalls?
+• What are the customization options?
+• What are the extended warranty options?
+• What is the dealer service experience?
+
+COMPETITIVE COMPARISON:
+• How does it compare to direct competitors in the same price range?
+• What are the key advantages over competitors?
+• What are the disadvantages compared to competitors?
+• How does the price-to-feature ratio compare with competitors?
+• What features are class-exclusive or best-in-segment?
+• What features are missing compared to competitors?
+• How does the warranty compare to competitors?
+• How does the service network compare to competitors?
+• What is the resale value compared to competitors?
+• How does the build quality compare?
+• What are the reliability ratings compared to competitors?
+• How do maintenance costs compare?
+• What are expert opinions on this model vs competitors?
+• How does it rank in independent comparison tests?
+• What are customer satisfaction ratings compared to competitors?
+• How does the brand reputation compare?
+
+SEGMENT ANALYSIS:
+• What is the exact segment positioning?
+• What are all the alternatives in the same price range?
+• What premium alternatives are available in the segment above?
+• What budget alternatives are available in the segment below?
+• How does it compare to segment leaders?
+• What is the target audience compared to competitors?
+• What are the segment-specific features?
+• How has it evolved compared to previous models?
+• What are the expected segment trends?
+• How does it align with segment expectations?
+
+VALUE PROPOSITION:
+• What is the overall value for money?
+• What are the unique selling points?
+• Who is the ideal buyer for this model?
+• What are the long-term ownership benefits?
+• What are the lifestyle and status implications?
+• How does it meet different user needs?
+• What are the practical advantages for daily use?
+• What are the special use case benefits?
+• What makes it stand out in its segment?
+• What type of buyers should consider alternatives?
+
+Format each point as a detailed bullet point with the • symbol. Include both the information from official sources and real-world experiences. Be specific with comparisons and include actual model names and features when comparing."""
 
     async def _query_perplexity(self, query: str) -> Optional[str]:
         """
-        Make a single query to Perplexity.ai API
+        Make a single query to Perplexity.ai API with maximum context
         """
         try:
             self.logger.debug("Preparing Perplexity API request")
@@ -333,15 +533,33 @@ COLORS:
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are a car information specialist. Provide accurate, detailed information about cars. Use bullet points (•) for listing features and maintain the exact section headers as provided in the query. Keep responses factual and concise."
+                        "content": """You are an expert automotive information specialist with deep knowledge of cars, their features, and the automotive industry. Your role is to:
+
+1. Provide extremely detailed, accurate, and comprehensive information about cars
+2. Include both official specifications and real-world experiences/reviews
+3. Be specific with numbers, measurements, and technical details
+4. Compare features with competitor vehicles when relevant
+5. Include both positive aspects and potential drawbacks
+6. Provide practical insights that would be valuable to potential buyers
+7. Structure information clearly using bullet points with the • symbol
+8. Maintain consistent formatting and section organization
+9. Focus on factual information rather than marketing language
+10. Include regional variations when applicable (features, pricing, availability)
+11. Provide extensive real-world examples and user experiences
+12. Include detailed technical specifications and measurements
+13. Add context about market positioning and historical evolution
+14. Reference specific trim levels and variant-specific information
+15. Include maintenance and long-term ownership insights
+
+Provide as much detailed information as possible, including specific examples, numbers, and comparisons. Don't summarize - give complete, detailed responses."""
                     },
                     {
                         "role": "user",
                         "content": query
                     }
                 ],
-                "temperature": 0.5,
-                "max_tokens": 1500
+                "temperature": 0.7,
+                "max_tokens": 4000  # Increased token limit for more detailed responses
             }
             
             self.logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
@@ -477,4 +695,213 @@ COLORS:
                 if parent and parent.text.strip():
                     pricing.append(parent.text.strip())
         
-        return list(set(pricing)) 
+        return list(set(pricing))
+
+    async def _get_competitor_info(self, car_model: str) -> Dict[str, List[Dict]]:
+        """
+        Get comprehensive information about competitors in same, upper, and lower segments
+        """
+        try:
+            # First, get detailed segment and competitor information
+            segment_query = f"""Provide extremely detailed information about {car_model}'s market positioning and competitors:
+
+1. Exact segment details:
+• Precise segment classification
+• Price range boundaries
+• Target audience demographics
+• Segment characteristics and expectations
+
+2. Direct competitors (same segment):
+• List all competing models with exact price ranges
+• Market share and sales data
+• Key feature comparisons
+• Target audience overlap
+
+3. Premium alternatives (segment above):
+• List all relevant models with price ranges
+• Additional features and premium offerings
+• Brand value comparison
+• Target audience differences
+
+4. Budget alternatives (segment below):
+• List all relevant models with price ranges
+• Feature trade-offs
+• Value proposition
+• Target audience differences
+
+5. Segment trends:
+• Current market dynamics
+• Consumer preferences
+• Technology adoption
+• Regulatory impacts
+
+Provide comprehensive details for each point, including specific model names, prices, features, and market data."""
+            
+            segment_info = await self._query_perplexity(segment_query)
+            if not segment_info:
+                return {}
+
+            # Get detailed comparison for each competitor
+            competitors = {
+                "same_segment": [],
+                "upper_segment": [],
+                "lower_segment": []
+            }
+
+            for segment_type in competitors.keys():
+                comparison_query = f"""Provide an extremely detailed comparison between {car_model} and its {segment_type.replace('_', ' ')} competitors. For each competitor model, include:
+
+1. Basic Information:
+• Full model name and variant details
+• Exact price range for all trim levels
+• Launch date and model year
+• Available body styles
+
+2. Technical Comparison:
+• Detailed engine specifications
+• Transmission options
+• Performance figures
+• Fuel efficiency data
+• Platform and architecture
+
+3. Feature Analysis:
+• Complete feature list comparison
+• Trim-level specific features
+• Standard vs optional equipment
+• Unique/exclusive features
+• Missing features compared to {car_model}
+
+4. Space and Dimensions:
+• External dimensions
+• Interior space measurements
+• Cargo capacity
+• Ground clearance
+• Weight comparison
+
+5. Safety and Technology:
+• Safety ratings
+• Safety feature list
+• Infotainment capabilities
+• Driver assistance systems
+• Connected car features
+
+6. Ownership Experience:
+• Warranty coverage
+• Service costs
+• Spare part prices
+• Insurance costs
+• Resale value trends
+
+7. Real-world Performance:
+• Actual fuel efficiency
+• Reliability data
+• Common issues
+• Maintenance requirements
+• User reviews and ratings
+
+8. Market Performance:
+• Sales figures
+• Market share
+• Customer satisfaction scores
+• Expert reviews and ratings
+• Awards and recognition
+
+9. Detailed Advantages/Disadvantages:
+• Feature advantages
+• Performance advantages
+• Value advantages
+• Brand advantages
+• After-sales advantages
+
+10. Long-term Ownership Insights:
+• 5-year ownership costs
+• Common problems and solutions
+• Aging characteristics
+• Long-term reliability
+• Community feedback
+
+Provide comprehensive details for each point, including specific numbers, measurements, and real-world examples."""
+
+                comparison_data = await self._query_perplexity(comparison_query)
+                if comparison_data:
+                    competitors[segment_type] = self._parse_competitor_data(comparison_data)
+
+            return competitors
+
+        except Exception as e:
+            self.logger.error(f"Error getting competitor info: {str(e)}")
+            return {}
+
+    def _parse_competitor_data(self, comparison_data: str) -> List[Dict]:
+        """
+        Parse detailed competitor comparison data into structured format
+        """
+        competitors = []
+        current_competitor = {}
+        current_section = None
+        current_subsection = None
+
+        for line in comparison_data.split('\n'):
+            line = line.strip()
+            
+            # Skip empty lines unless they're section separators
+            if not line:
+                if current_competitor and len(current_competitor) > 0:
+                    competitors.append(current_competitor.copy())
+                    current_competitor = {}
+                current_section = None
+                current_subsection = None
+                continue
+
+            # Handle numbered sections (1., 2., etc.)
+            if re.match(r'^\d+\.', line):
+                current_section = line.split('.', 1)[1].strip().lower().replace(' ', '_')
+                current_subsection = None
+                if current_section not in current_competitor:
+                    current_competitor[current_section] = {}
+                continue
+
+            # Handle bullet points
+            if line.startswith('•'):
+                item = line.lstrip('• ').strip()
+                
+                # Handle key-value pairs
+                if ':' in item:
+                    key, value = item.split(':', 1)
+                    key = key.strip().lower().replace(' ', '_')
+                    value = value.strip()
+                    
+                    if current_subsection:
+                        if isinstance(current_competitor[current_section], dict):
+                            if current_subsection not in current_competitor[current_section]:
+                                current_competitor[current_section][current_subsection] = {}
+                            current_competitor[current_section][current_subsection][key] = value
+                    else:
+                        if isinstance(current_competitor[current_section], dict):
+                            current_competitor[current_section][key] = value
+                        else:
+                            current_competitor[current_section] = {key: value}
+                else:
+                    # Handle plain bullet points
+                    if current_section:
+                        if current_subsection:
+                            if isinstance(current_competitor[current_section], dict):
+                                if current_subsection not in current_competitor[current_section]:
+                                    current_competitor[current_section][current_subsection] = []
+                                current_competitor[current_section][current_subsection].append(item)
+                        else:
+                            if isinstance(current_competitor[current_section], dict):
+                                if 'details' not in current_competitor[current_section]:
+                                    current_competitor[current_section]['details'] = []
+                                current_competitor[current_section]['details'].append(item)
+                            else:
+                                current_competitor[current_section] = [item]
+            else:
+                # Handle subsections
+                current_subsection = line.lower().replace(' ', '_')
+
+        # Add the last competitor if exists
+        if current_competitor and len(current_competitor) > 0:
+            competitors.append(current_competitor)
+
+        return competitors 
