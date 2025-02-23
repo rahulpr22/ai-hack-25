@@ -125,16 +125,13 @@ st.markdown("""
 async def render_ingestion_tab(processor: BrochureProcessor, vector_store: VectorStore, video_processor: VideoProcessor):
     """Render the data ingestion tab"""
     st.header("📚 Knowledge Base Management")
-    st.write("Upload car brochures with optional images")
-
+    st.write("Upload car brochures to add product information")
+    
     # File upload tabs
-    # upload_tabs = st.tabs(["📄 PDF Upload", "📝 Markdown/Text"])
     upload_tabs = st.tabs(["📄 PDF Upload"])
 
     # PDF Tab
     with upload_tabs[0]:
-        # st.subheader("Upload PDF and Images")
-
         with st.form("car_details_pdf"):
             product_name = st.text_input(
                 "Product Name",
@@ -147,47 +144,12 @@ async def render_ingestion_tab(processor: BrochureProcessor, vector_store: Vecto
                 placeholder="e.g., Premium mid-size sedan with advanced features",
                 help="Provide a brief description of the product's key features"
             )
-
-            # Image upload section with descriptions
-            st.write("Upload Images (Maximum 4)")
-            uploaded_images = st.file_uploader("Choose images",
-                                             type=["jpg", "jpeg", "png"],
-                                             accept_multiple_files=True)
-
-            # Image descriptions
-            image_descriptions = []
-            if uploaded_images:
-                if len(uploaded_images) > 4:
-                    st.error("Please upload a maximum of 4 images")
-                else:
-                    # Display uploaded images in a grid with description inputs
-                    for idx, image in enumerate(uploaded_images):
-                        st.write(f"Image {idx + 1}")
-                        col1, col2 = st.columns([1, 2])
-                        with col1:
-                            st.image(image, use_container_width=True)
-                        with col2:
-                            view_type = st.selectbox(
-                                "View Type",
-                                ["exterior", "interior", "feature", "other"],
-                                key=f"view_type_{idx}"
-                            )
-                            description = st.text_area(
-                                "Description",
-                                placeholder="Describe what this image shows...",
-                                key=f"desc_{idx}",
-                                height=100
-                            )
-                            image_descriptions.append({
-                                "type": view_type,
-                                "description": description
-                            })
-
+            
             # PDF upload
-            uploaded_pdf = st.file_uploader("Upload PDF", type="pdf")
-
+            uploaded_pdf = st.file_uploader("Upload Brochure as PDF", type="pdf")
+            
             submit_button = st.form_submit_button("Process")
-
+            
             if submit_button:
                 if not uploaded_pdf:
                     st.error("Please upload a PDF file")
@@ -199,78 +161,17 @@ async def render_ingestion_tab(processor: BrochureProcessor, vector_store: Vecto
                         with st.spinner("Processing PDF..."):
                             car_data = processor.process_pdf(uploaded_pdf, product_name)
 
-                        # Upsert car data without videos
+                        # Upsert car data
                         with st.spinner("Storing car data in database..."):
                             await vector_store.upsert_car_data(
                                 car_data=car_data,
                                 car_model=product_name,
                             )
 
-                        # Process images if provided
-                        processed_images = []
-                        image_paths = []  # Track image paths for video creation
-                        if uploaded_images and image_descriptions:
-                            with st.spinner("Processing images..."):
-                                for img, desc in zip(uploaded_images, image_descriptions):
-                                    img_bytes = img.read()
-                                    img_base64 = base64.b64encode(img_bytes).decode()
-                                    processed_images.append({
-                                        "image_data": img_base64,
-                                        "metadata": {
-                                            "type": desc["type"],
-                                            "description": desc["description"]
-                                        }
-                                    })
-                                    # Save image temporarily for video creation
-                                    temp_path = f"/tmp/{img.name}"
-                                    with open(temp_path, "wb") as f:
-                                        f.write(base64.b64decode(img_base64))
-                                    image_paths.append(temp_path)
-
-                        # Create video from images if available
-                        if image_paths:
-                            with st.spinner("Creating video from images..."):
-                                try:
-                                    # Convert image data to expected format
-                                    image_data_list = [
-                                        {
-                                            "image_data": img["image_data"],
-                                            "metadata": img["metadata"]
-                                        } for img in processed_images
-                                    ]
-
-                                    # Create new event loop for video processing
-                                    # loop = asyncio.new_event_loop()
-                                    # asyncio.set_event_loop(loop)
-
-                                    # Process video in the new loop
-                                    await video_processor.create_video_from_images(
-                                        images=image_data_list,
-                                        duration_per_image=3,
-                                        product_name=product_name,
-                                    )
-
-                                    # loop.run_until_complete(
-                                    #     video_processor.create_video_from_images(
-                                    #         images=image_data_list,
-                                    #         duration_per_image=3,
-                                    #         product_name=product_name,
-                                    #     )
-                                    # )
-                                    # loop.close()
-                                except Exception as e:
-                                    st.error(f"Error creating video: {str(e)}")
-                        
                         st.success("Successfully processed and stored car information!")
-
+                        
                     except Exception as e:
                         st.error(f"Error processing data: {str(e)}")
-
-
-async def render_chat_tab(vector_store: VectorStore):
-    """Render the chat interface tab"""
-    st.header("🚗 Car Sales Assistant")
-    st.write("Your AI-powered automotive consultant")
 
 async def render_chat_tab():
     """Render the chat interface with video and chat sections"""
@@ -353,6 +254,126 @@ async def render_chat_tab():
         with columns[2]:
             st.empty()
 
+async def render_video_tab(video_processor: VideoProcessor):
+    """Render the video creation tab"""
+    st.header("🎥 Create Product Videos")
+    st.write("Upload images to create transition videos")
+
+    # Initialize categories in session state if not exists
+    if "categories" not in st.session_state:
+        # Initialize with one empty category by default
+        st.session_state.categories = [{}]
+
+    # Category management section (above form)
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.subheader("Categories")
+
+    # Main form for video creation
+    with st.form("video_creation_form", clear_on_submit=False):
+        # Product name
+        product_name = st.text_input(
+            "Product Name",
+            placeholder="e.g., Toyota Camry XSE V6",
+            help="Enter the product name for the video"
+        )
+
+        # Display existing categories
+        for idx, _ in enumerate(st.session_state.categories):
+            st.subheader(f"Category {idx + 1}")
+            category_name = st.text_input(
+                "Category Name",
+                placeholder="e.g., Exterior Views, Performance Features",
+                key=f"category_{idx}_name",
+                help="Enter a name for this category of images"
+            )
+            
+            # Add max files info
+            st.markdown("_Upload up to 4 images for this category_")
+            uploaded_images = st.file_uploader(
+                "Upload images",
+                type=["jpg", "jpeg", "png"],
+                accept_multiple_files=True,
+                key=f"category_{idx}_images"
+            )
+
+            # Initialize image descriptions list
+            image_descriptions = []
+            
+            # Image handling without descriptions
+            if uploaded_images:
+                if len(uploaded_images) > 4:
+                    st.error("⚠️ Please select only 4 images for this category")
+                    uploaded_images = uploaded_images[:4]
+                
+                cols = st.columns(min(len(uploaded_images), 4))
+                for img_idx, image in enumerate(uploaded_images):
+                    with cols[img_idx]:
+                        st.image(image, use_container_width=True)
+                        # Add a default description
+                        image_descriptions.append({
+                            "type": category_name if category_name else f"category_{idx}",
+                            "description": f"Image {img_idx + 1} of {category_name if category_name else f'Category {idx + 1}'}"
+                        })
+            
+            # Store the data in session state
+            st.session_state.categories[idx] = {
+                "name": category_name,
+                "images": uploaded_images if uploaded_images else [],
+                "descriptions": image_descriptions
+            }
+
+        # Buttons row at the bottom
+        col1, col2 = st.columns([6, 1])  # Wider first column, narrow second column
+        with col1:
+            if len(st.session_state.categories) < 4:  # Limit to 4 categories
+                if st.form_submit_button("➕ Add New Category", type="secondary"):
+                    st.session_state.categories.append({})
+                    st.rerun()
+        with col2:
+            submit = st.form_submit_button("Submit", type="primary", use_container_width=True)
+
+        # Process form submission
+        if submit:
+            if not product_name:
+                st.error("Please enter a product name")
+            elif not st.session_state.categories:
+                st.error("Please add at least one category")
+            else:
+                try:
+                    # Process each category
+                    for idx, category in enumerate(st.session_state.categories):
+                        if not category.get("name"):
+                            st.error(f"Please provide a name for category {idx + 1}")
+                            continue
+                        
+                        if not category.get("images"):
+                            st.warning(f"No images provided for {category['name']}")
+                            continue
+
+                        with st.spinner(f"Creating {category['name']} video..."):
+                            processed_images = []
+                            for img, desc in zip(category["images"], category["descriptions"]):
+                                img_bytes = img.read()
+                                img_base64 = base64.b64encode(img_bytes).decode()
+                                processed_images.append({
+                                    "image_data": img_base64,
+                                    "metadata": desc
+                                })
+
+                            try:
+                                await video_processor.create_video_from_images(
+                                    images=processed_images,
+                                    product_name=f"{product_name}_{category['name'].lower().replace(' ', '_')}",
+                                    duration_per_image=3
+                                )
+                                st.success(f"{category['name']} video created successfully!")
+                            except Exception as e:
+                                st.error(f"Error creating {category['name']} video: {str(e)}")
+
+                except Exception as e:
+                    st.error(f"Error processing images: {str(e)}")
+
 async def main():
     st.title("Sales Assistant")
 
@@ -365,13 +386,16 @@ async def main():
         st.info("Please make sure your API keys are properly set in the .env file")
         return
 
-    tabs = st.tabs(["💬 Chat", "📚 Add a New Product"])
+    tabs = st.tabs(["💬 Chat", "📚 Add a New Product", "🎥 Create Video"])
 
     with tabs[0]:
         await render_chat_tab()
 
     with tabs[1]:
         await render_ingestion_tab(processor, vector_store, video_processor)
+        
+    with tabs[2]:
+        await render_video_tab(video_processor)
 
 
 if __name__ == "__main__":

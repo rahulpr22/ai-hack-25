@@ -68,36 +68,51 @@ class VideoProcessor:
 
     async def _generate_transition_video(self, start_url: str, end_url: str, description: str,
                                          product_name: str) -> str:
+        handler = None
         try:
             prompt = f"A smooth transition showcasing {description}, moving naturally between views"
             handler = await fal_client.submit_async(
                 "fal-ai/minimax/video-01/image-to-video",
                 arguments={"prompt": prompt, "image_url": start_url, "target_image_url": end_url},
             )
+
+            if not handler:
+                raise Exception("Failed to submit async request to fal.ai")
+
+            video_url = None
             async for event in handler.iter_events(with_logs=True):
-                if isinstance(event, dict) and event.get('error'):
-                    raise Exception(f"Error from fal.ai: {event['error']}")
-                self.logger.info(event)
-            result = await handler.get()
-            if not result or 'video' not in result:
-                raise Exception("Invalid response format from fal.ai")
-            video_url = result['video'].get('url')
+                self.logger.info(event)  # Log all events
+                if isinstance(event, dict):
+                    if event.get('error'):
+                        raise Exception(f"Error from fal.ai: {event['error']}")
+                    # Check for video URL in the event
+                    if 'video' in event and event['video'].get('url'):
+                        video_url = event['video']['url']
+                        break
+
             if not video_url:
-                raise Exception("No video URL in response")
-            timeout = aiohttp.ClientTimeout(total=360)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+                # Try getting result one more time
+                result = await handler.get()
+                if result and 'video' in result and result['video'].get('url'):
+                    video_url = result['video']['url']
+                else:
+                    raise Exception("No video URL received from fal.ai")
+
+            async with aiohttp.ClientSession() as session:
                 async with session.get(video_url) as response:
                     if response.status != 200:
-                        raise Exception("Failed to download video from fal.ai")
+                        raise Exception(f"Failed to download video, HTTP {response.status}")
                     video_content = await response.read()
-            safe_product_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in product_name)
-            video_path = os.path.join(self.videos_dir, f"{safe_product_name}.mp4")
+
+            video_path = os.path.join(self.videos_dir, f"{product_name.replace(' ', '_')}.mp4")
             with open(video_path, "wb") as video_file:
                 video_file.write(video_content)
-            self.logger.info(f"Video saved to {video_path}")
+
+            self.logger.info(f"✅ Video saved to {video_path}")
             return base64.b64encode(video_content).decode()
+
         except Exception as e:
-            self.logger.error(f"Error generating transition video: {str(e)}")
+            self.logger.error(f"❌ Error generating transition video: {str(e)}")
             raise
 
     async def create_video_from_images(self, images: List[Dict], product_name: str, duration_per_image: int = 3) -> str:
